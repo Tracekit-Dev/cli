@@ -10,8 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/yourusername/context.io/cli/internal/client"
+	"github.com/yourusername/context.io/cli/internal/config"
 	"github.com/yourusername/context.io/cli/internal/detector"
 	"github.com/yourusername/context.io/cli/internal/ui"
+	"github.com/yourusername/context.io/cli/internal/utils"
 )
 
 const CLIVersion = "1.0.0"
@@ -136,14 +138,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	// Step 6: Save TraceKit config to .env
-	envConfig := EnvConfig{
+	cfg := &config.Config{
 		APIKey:                 verifyResp.APIKey,
 		Endpoint:               apiClient.BaseURL + "/v1/traces",
 		ServiceName:            serviceName,
 		Enabled:                "true",
 		CodeMonitoringEnabled:  "true",
 	}
-	if err := saveEnvConfig(envConfig); err != nil {
+	if err := config.Save(cfg); err != nil {
 		ui.PrintWarning(fmt.Sprintf("Failed to save .env file: %v", err))
 		fmt.Println()
 		ui.PrintMuted("📝 Manual setup required:")
@@ -160,7 +162,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Summary box
 	summary := fmt.Sprintf("Dashboard:  %s\nAPI Key:    %s\nService:    %s\nPlan:       Hacker (Free - 200k traces/month)",
 		verifyResp.DashboardURL,
-		maskAPIKey(verifyResp.APIKey),
+		utils.MaskAPIKey(verifyResp.APIKey),
 		verifyResp.ServiceName)
 
 	ui.PrintSummaryBox("🎉 Setup Complete!", summary)
@@ -224,82 +226,4 @@ func promptEmail() (string, error) {
 	}
 
 	return email, nil
-}
-
-type EnvConfig struct {
-	APIKey                string
-	Endpoint              string
-	ServiceName           string
-	Enabled               string
-	CodeMonitoringEnabled string
-}
-
-func saveEnvConfig(config EnvConfig) error {
-	envPath := ".env"
-
-	// TraceKit config block
-	tracekitConfig := fmt.Sprintf(`
-# TraceKit Configuration
-TRACEKIT_API_KEY=%s
-TRACEKIT_ENDPOINT=%s
-TRACEKIT_SERVICE_NAME=%s
-TRACEKIT_ENABLED=%s
-TRACEKIT_CODE_MONITORING_ENABLED=%s
-`, config.APIKey, config.Endpoint, config.ServiceName, config.Enabled, config.CodeMonitoringEnabled)
-
-	// Check if .env exists
-	var existingContent string
-	if _, err := os.Stat(envPath); err == nil {
-		// File exists, read it
-		content, err := os.ReadFile(envPath)
-		if err != nil {
-			return err
-		}
-		existingContent = string(content)
-
-		// Check if TraceKit config already exists
-		if strings.Contains(existingContent, "# TraceKit Configuration") {
-			// Replace existing TraceKit section
-			lines := strings.Split(existingContent, "\n")
-			var newLines []string
-			skipUntilNextSection := false
-
-			for _, line := range lines {
-				if strings.Contains(line, "# TraceKit Configuration") {
-					skipUntilNextSection = true
-					continue
-				}
-				if skipUntilNextSection {
-					// Skip lines that start with TRACEKIT_
-					if strings.HasPrefix(strings.TrimSpace(line), "TRACEKIT_") {
-						continue
-					}
-					// Stop skipping when we hit a non-TraceKit line
-					if strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "TRACEKIT_") {
-						skipUntilNextSection = false
-					}
-				}
-				if !skipUntilNextSection {
-					newLines = append(newLines, line)
-				}
-			}
-			existingContent = strings.Join(newLines, "\n") + tracekitConfig
-		} else {
-			// Append TraceKit config
-			existingContent += tracekitConfig
-		}
-	} else {
-		// File doesn't exist, create new with TraceKit config
-		existingContent = tracekitConfig
-	}
-
-	// Write to file
-	return os.WriteFile(envPath, []byte(existingContent), 0644)
-}
-
-func maskAPIKey(apiKey string) string {
-	if len(apiKey) < 20 {
-		return apiKey
-	}
-	return apiKey[:15] + "..." + apiKey[len(apiKey)-4:]
 }
