@@ -505,11 +505,12 @@ func promptSDKInstall(framework *detector.Framework) error {
 	fmt.Println()
 
 	// Prompt user
-	ui.PrintPrompt(fmt.Sprintf("Install %s now?", recommendedSDK.Name))
+	fmt.Println("Install " + recommendedSDK.Name + " now?")
 	ui.PrintMuted("   Y     = Install recommended SDK")
 	ui.PrintMuted("   n     = Skip installation")
 	ui.PrintMuted("   other = Show all available SDKs")
-	fmt.Print("\n▸ Your choice: ")
+	fmt.Println()
+	ui.PrintPrompt("Your choice:")
 
 	var response string
 	fmt.Scanln(&response)
