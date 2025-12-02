@@ -12,6 +12,7 @@ import (
 	"github.com/yourusername/context.io/cli/internal/client"
 	"github.com/yourusername/context.io/cli/internal/config"
 	"github.com/yourusername/context.io/cli/internal/detector"
+	"github.com/yourusername/context.io/cli/internal/sdk"
 	"github.com/yourusername/context.io/cli/internal/trace"
 	"github.com/yourusername/context.io/cli/internal/ui"
 	"github.com/yourusername/context.io/cli/internal/utils"
@@ -189,7 +190,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	// Step 9: Show final summary and next steps
+	// Step 9: Prompt for SDK installation
+	if err := promptSDKInstall(framework); err != nil {
+		ui.PrintWarning(fmt.Sprintf("SDK installation skipped: %v", err))
+	}
+	fmt.Println()
+
+	// Step 10: Show final summary and next steps
 	ui.PrintDivider()
 	fmt.Println()
 
@@ -293,6 +300,110 @@ func showStatusInternal(cfg *config.Config, apiClient *client.Client, useDev boo
 			} else {
 				ui.PrintMuted("   First trace: Just now!")
 			}
+		}
+	}
+
+	return nil
+}
+
+// promptSDKInstall prompts user to install SDK
+func promptSDKInstall(framework *detector.Framework) error {
+	ui.PrintSection("📦 SDK Installation")
+	fmt.Println()
+
+	// Get recommended SDK
+	recommendedSDK := sdk.GetRecommendedSDK(framework.Type, framework.Name)
+	if recommendedSDK == nil {
+		ui.PrintInfo("No SDK recommendation available for your framework")
+		ui.PrintMuted("   Visit https://docs.tracekit.dev for manual setup")
+		return nil
+	}
+
+	// Show recommendation
+	ui.PrintInfo(fmt.Sprintf("Recommended: %s", recommendedSDK.Name))
+	ui.PrintMuted(fmt.Sprintf("   %s", recommendedSDK.Description))
+	fmt.Println()
+
+	// Prompt user
+	ui.PrintPrompt(fmt.Sprintf("Install %s now? (Y/n/other):", recommendedSDK.Name))
+	ui.PrintMuted("   Y = Install recommended SDK")
+	ui.PrintMuted("   n = Skip installation")
+	ui.PrintMuted("   other = Show all available SDKs")
+
+	var response string
+	fmt.Scanln(&response)
+	response = strings.ToLower(strings.TrimSpace(response))
+
+	if response == "" || response == "y" || response == "yes" {
+		// Install recommended SDK
+		return installSDK(*recommendedSDK)
+	} else if response == "n" || response == "no" {
+		ui.PrintInfo("Skipping SDK installation")
+		fmt.Println()
+		ui.PrintMuted("You can install manually later:")
+		ui.PrintMuted("   " + recommendedSDK.InstallCmd)
+		return nil
+	} else {
+		// Show all available SDKs
+		return promptSDKSelection()
+	}
+}
+
+// promptSDKSelection shows all SDKs and lets user choose
+func promptSDKSelection() error {
+	fmt.Println()
+	ui.PrintInfo("Available SDKs:")
+	fmt.Println()
+
+	sdks := sdk.GetAvailableSDKs()
+	for i, s := range sdks {
+		ui.PrintMuted(fmt.Sprintf("   %d. %s - %s", i+1, s.Name, s.Description))
+	}
+	fmt.Println()
+
+	ui.PrintPrompt("Select SDK number (or 0 to skip):")
+	var choice int
+	fmt.Scanln(&choice)
+
+	if choice == 0 {
+		ui.PrintInfo("Skipping SDK installation")
+		return nil
+	}
+
+	if choice < 1 || choice > len(sdks) {
+		return fmt.Errorf("invalid selection")
+	}
+
+	selectedSDK := sdks[choice-1]
+	return installSDK(selectedSDK)
+}
+
+// installSDK installs the selected SDK
+func installSDK(selectedSDK sdk.SDK) error {
+	fmt.Println()
+	ui.PrintInfo(fmt.Sprintf("Installing %s...", selectedSDK.Name))
+	ui.PrintMuted("   Running: " + selectedSDK.InstallCmd)
+	fmt.Println()
+
+	if err := sdk.Install(selectedSDK); err != nil {
+		ui.PrintError(fmt.Sprintf("Installation failed: %v", err))
+		fmt.Println()
+		ui.PrintMuted("Please install manually:")
+		ui.PrintMuted("   " + selectedSDK.InstallCmd)
+		return err
+	}
+
+	ui.PrintSuccess(fmt.Sprintf("%s installed successfully!", selectedSDK.Name))
+	fmt.Println()
+
+	// Show initialization instructions
+	instructions := sdk.GetInstallInstructions(selectedSDK)
+	ui.PrintInfo("Next steps:")
+	for _, instruction := range instructions {
+		if instruction == "" {
+			fmt.Println()
+		} else {
+			ui.PrintMuted("   " + instruction)
 		}
 	}
 
