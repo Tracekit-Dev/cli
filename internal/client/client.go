@@ -198,3 +198,40 @@ func (c *Client) GetStatus() (map[string]interface{}, error) {
 
 	return status, nil
 }
+
+// PostHealthCheck creates a new health check configuration
+func (c *Client) PostHealthCheck(apiURL, apiKey string, requestBody map[string]interface{}) error {
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", apiURL+"/api/health-checks", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-API-Key", apiKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}

@@ -98,7 +98,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	registerReq := &client.RegisterRequest{
 		Email:            email,
-		OrganizationName: serviceName,
+		OrganizationName: "", // Leave empty to let backend generate a fancy random name
 		ServiceName:      serviceName,
 		Source:           framework.Name,
 		SourceMetadata: map[string]interface{}{
@@ -196,7 +196,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	// Step 10: Show final summary and next steps
+	// Step 10: Prompt for health check setup
+	if err := promptHealthCheckSetup(cfg, apiClient); err != nil {
+		ui.PrintWarning(fmt.Sprintf("Health check setup skipped: %v", err))
+	}
+	fmt.Println()
+
+	// Step 11: Show final summary and next steps
 	ui.PrintDivider()
 	fmt.Println()
 
@@ -248,6 +254,180 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.PrintNextSteps(steps)
+
+	return nil
+}
+
+// promptHealthCheckSetup prompts user to configure health check monitoring
+func promptHealthCheckSetup(cfg *config.Config, apiClient *client.Client) error {
+	ui.PrintSection("🏥 Health Check Setup")
+	fmt.Println()
+
+	ui.PrintInfo("Set up health check monitoring for your service?")
+	ui.PrintMuted("   Monitor your service health with automatic alerts")
+	ui.PrintMuted("   • Pull-based: TraceKit pings your endpoint")
+	ui.PrintMuted("   • Push-based: Your service sends heartbeats")
+	fmt.Println()
+
+	ui.PrintPrompt("Configure health check now? (Y/n):")
+	var response string
+	fmt.Scanln(&response)
+	response = strings.ToLower(strings.TrimSpace(response))
+
+	if response == "n" || response == "no" {
+		ui.PrintInfo("Skipping health check setup")
+		ui.PrintMuted("   You can set it up later with: tracekit health setup")
+		return nil
+	}
+
+	// User wants to set up health check
+	fmt.Println()
+	ui.PrintInfo("Choose health check type:")
+	ui.PrintMuted("   [1] Pull-based - TraceKit pings your endpoint (recommended)")
+	ui.PrintMuted("   [2] Push-based - Your service sends heartbeats")
+	ui.PrintMuted("   [0] Skip for now")
+	fmt.Println()
+
+	ui.PrintPrompt("Select type (0-2):")
+	var typeChoice string
+	fmt.Scanln(&typeChoice)
+	typeChoice = strings.TrimSpace(typeChoice)
+
+	if typeChoice == "0" {
+		ui.PrintInfo("Skipping health check setup")
+		ui.PrintMuted("   You can set it up later with: tracekit health setup")
+		return nil
+	}
+
+	if typeChoice == "1" {
+		return setupPullBasedHealthCheckFromInit(cfg, apiClient)
+	} else if typeChoice == "2" {
+		return setupPushBasedHealthCheckFromInit(cfg, apiClient)
+	}
+
+	ui.PrintWarning("Invalid selection, skipping health check setup")
+	return nil
+}
+
+// setupPullBasedHealthCheckFromInit sets up pull-based health check during init
+func setupPullBasedHealthCheckFromInit(cfg *config.Config, apiClient *client.Client) error {
+	fmt.Println()
+	ui.PrintInfo("Pull-based Health Check Configuration")
+	fmt.Println()
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// Get endpoint URL
+	ui.PrintPrompt("Health check endpoint URL (e.g., https://myapp.com/health):")
+	endpointURL, _ := reader.ReadString('\n')
+	endpointURL = strings.TrimSpace(endpointURL)
+
+	if endpointURL == "" {
+		ui.PrintWarning("Endpoint URL is required")
+		ui.PrintMuted("   Run 'tracekit health setup' to configure later")
+		return fmt.Errorf("endpoint URL required")
+	}
+	fmt.Println()
+
+	// Use sensible defaults for init flow (no prompts)
+	checkName := "health-check"
+	interval := 60
+	expectedStatus := 200
+
+	ui.PrintInfo("Using default settings:")
+	ui.PrintMuted(fmt.Sprintf("   Check name: %s", checkName))
+	ui.PrintMuted(fmt.Sprintf("   Interval: %d seconds", interval))
+	ui.PrintMuted(fmt.Sprintf("   Expected status: %d", expectedStatus))
+	fmt.Println()
+
+	// Create health check via API
+	ui.PrintInfo("Creating health check...")
+
+	requestBody := map[string]interface{}{
+		"service_name":              cfg.ServiceName,
+		"check_name":                checkName,
+		"endpoint_url":              endpointURL,
+		"check_method":              "GET",
+		"expected_status_code":      expectedStatus,
+		"check_interval_seconds":    interval,
+		"alert_enabled":             true,
+	}
+
+	apiURL := strings.Replace(cfg.Endpoint, "/v1/traces", "", 1)
+	if err := apiClient.PostHealthCheck(apiURL, cfg.APIKey, requestBody); err != nil {
+		ui.PrintError(fmt.Sprintf("Failed to create health check: %v", err))
+		ui.PrintMuted("   Run 'tracekit health setup' to try again")
+		return err
+	}
+
+	ui.PrintSuccess("Health check configured!")
+	fmt.Println()
+
+	ui.PrintMuted("✓ TraceKit will ping your endpoint every 60 seconds")
+	ui.PrintMuted("✓ Alerts triggered if 3 consecutive checks fail")
+	ui.PrintMuted("✓ Run 'tracekit health list' to view status")
+
+	return nil
+}
+
+// setupPushBasedHealthCheckFromInit sets up push-based health check during init
+func setupPushBasedHealthCheckFromInit(cfg *config.Config, apiClient *client.Client) error {
+	fmt.Println()
+	ui.PrintInfo("Push-based Health Check Configuration")
+	fmt.Println()
+
+	interval := 60
+	gracePeriod := 30
+	checkName := "heartbeat"
+
+	ui.PrintMuted("Your service should send heartbeats every 60 seconds")
+	fmt.Println()
+
+	// Create health check via API
+	ui.PrintInfo("Creating health check...")
+
+	requestBody := map[string]interface{}{
+		"service_name":               cfg.ServiceName,
+		"check_name":                 checkName,
+		"check_type":                 "push",
+		"heartbeat_interval_seconds": interval,
+		"grace_period_seconds":       gracePeriod,
+		"alert_enabled":              true,
+	}
+
+	apiURL := strings.Replace(cfg.Endpoint, "/v1/traces", "", 1)
+	if err := apiClient.PostHealthCheck(apiURL, cfg.APIKey, requestBody); err != nil {
+		ui.PrintError(fmt.Sprintf("Failed to create health check: %v", err))
+		ui.PrintMuted("   Run 'tracekit health setup' to try again")
+		return err
+	}
+
+	ui.PrintSuccess("Health check configured!")
+	fmt.Println()
+
+	// Show implementation example
+	ui.PrintInfo("Add this code to your service:")
+	fmt.Println()
+
+	heartbeatEndpoint := apiURL + "/v1/health/heartbeat"
+
+	ui.PrintMuted("Example (adapt for your language):")
+	fmt.Printf(`
+  POST %s
+  Headers: X-API-Key: %s
+  Body: {
+    "service_name": "%s",
+    "status": "healthy"
+  }
+
+  Send this request every %d seconds
+`, heartbeatEndpoint, cfg.APIKey, cfg.ServiceName, interval)
+
+	fmt.Println()
+
+	ui.PrintMuted("✓ Send heartbeats from your service every 60 seconds")
+	ui.PrintMuted("✓ Alerts triggered if 3 heartbeats are missed")
+	ui.PrintMuted("✓ Run 'tracekit health list' to view status")
 
 	return nil
 }
@@ -325,10 +505,11 @@ func promptSDKInstall(framework *detector.Framework) error {
 	fmt.Println()
 
 	// Prompt user
-	ui.PrintPrompt(fmt.Sprintf("Install %s now? (Y/n/other):", recommendedSDK.Name))
-	ui.PrintMuted("   Y = Install recommended SDK")
-	ui.PrintMuted("   n = Skip installation")
+	ui.PrintPrompt(fmt.Sprintf("Install %s now?", recommendedSDK.Name))
+	ui.PrintMuted("   Y     = Install recommended SDK")
+	ui.PrintMuted("   n     = Skip installation")
 	ui.PrintMuted("   other = Show all available SDKs")
+	fmt.Print("\n▸ Your choice: ")
 
 	var response string
 	fmt.Scanln(&response)
