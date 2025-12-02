@@ -91,6 +91,26 @@ func Install(sdk SDK) error {
 		}
 		cmd = exec.Command("composer", "require", sdk.PackageName)
 
+		// Run composer require
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+
+		// For Laravel, run vendor:publish command
+		if sdk.Name == "Laravel" {
+			if commandExists("php") {
+				publishCmd := exec.Command("php", "artisan", "vendor:publish", "--provider=TraceKit\\Laravel\\TracekitServiceProvider")
+				publishCmd.Stdout = nil
+				publishCmd.Stderr = nil
+				// Ignore error if artisan command fails (user might need to run it manually)
+				_ = publishCmd.Run()
+			}
+		}
+
+		return nil
+
 	case "node":
 		// Check if npm exists, fallback to yarn
 		if commandExists("npm") {

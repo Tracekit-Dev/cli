@@ -2,7 +2,11 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -142,7 +146,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Step 6: Save TraceKit config to .env
 	cfg := &config.Config{
 		APIKey:                 verifyResp.APIKey,
-		Endpoint:               apiClient.BaseURL + "/v1/traces",
+		Endpoint:               apiClient.BaseURL, // Store base URL only
 		ServiceName:            serviceName,
 		Enabled:                "true",
 		CodeMonitoringEnabled:  "true",
@@ -196,7 +200,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	// Step 10: Prompt for health check setup
+	// Step 10: Prompt for webhook setup
+	if err := promptWebhookSetup(cfg, apiClient, useDev); err != nil {
+		ui.PrintWarning(fmt.Sprintf("Webhook setup skipped: %v", err))
+	}
+	fmt.Println()
+
+	// Step 11: Prompt for health check setup
 	if err := promptHealthCheckSetup(cfg, apiClient); err != nil {
 		ui.PrintWarning(fmt.Sprintf("Health check setup skipped: %v", err))
 	}
@@ -254,6 +264,185 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.PrintNextSteps(steps)
+
+	return nil
+}
+
+// promptWebhookSetup prompts user to configure a webhook
+func promptWebhookSetup(cfg *config.Config, apiClient *client.Client, useDev bool) error {
+	ui.PrintSection("🔗 Webhook Setup")
+	fmt.Println()
+
+	ui.PrintInfo("Set up webhooks for real-time event notifications?")
+	ui.PrintMuted("   Receive instant alerts when events occur:")
+	ui.PrintMuted("   • Health check failures")
+	ui.PrintMuted("   • Alert triggers")
+	ui.PrintMuted("   • Trace errors")
+	fmt.Println()
+
+	ui.PrintPrompt("Configure webhook now? (y/N):")
+	var response string
+	fmt.Scanln(&response)
+	response = strings.ToLower(strings.TrimSpace(response))
+
+	if response != "y" && response != "yes" {
+		ui.PrintInfo("Skipping webhook setup")
+		ui.PrintMuted("   You can set it up later with: tracekit webhook create")
+		return nil
+	}
+
+	// Get webhook name
+	fmt.Println()
+	ui.PrintPrompt("Webhook name:")
+	var name string
+	reader := bufio.NewReader(os.Stdin)
+	name, _ = reader.ReadString('\n')
+	name = strings.TrimSpace(name)
+
+	if name == "" {
+		return fmt.Errorf("webhook name is required")
+	}
+
+	// Get webhook URL
+	if useDev {
+		ui.PrintPrompt("Webhook URL (http:// or https://):")
+	} else {
+		ui.PrintPrompt("Webhook URL (must be HTTPS):")
+	}
+	url, _ := reader.ReadString('\n')
+	url = strings.TrimSpace(url)
+
+	if url == "" {
+		return fmt.Errorf("webhook URL is required")
+	}
+
+	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+		return fmt.Errorf("webhook URL must start with https:// or http://")
+	}
+
+	// In production, enforce HTTPS (unless localhost)
+	if !useDev && !strings.HasPrefix(url, "https://") && !strings.Contains(url, "localhost") && !strings.Contains(url, "127.0.0.1") {
+		return fmt.Errorf("webhook URL must use HTTPS in production (got: %s)", url)
+	}
+
+	// Get description (optional)
+	ui.PrintPrompt("Description (optional, press Enter to skip):")
+	description, _ := reader.ReadString('\n')
+	description = strings.TrimSpace(description)
+
+	// Show available events
+	fmt.Println()
+	ui.PrintInfo("Select events to subscribe to:")
+	ui.PrintMuted("   [1] health_check.failed")
+	ui.PrintMuted("   [2] health_check.recovered")
+	ui.PrintMuted("   [3] alert.triggered")
+	ui.PrintMuted("   [4] alert.resolved")
+	ui.PrintMuted("   [5] trace.error")
+	ui.PrintMuted("   [6] anomaly.detected")
+	fmt.Println()
+
+	ui.PrintPrompt("Enter event numbers (comma-separated, e.g., 1,3,5):")
+	eventsInput, _ := reader.ReadString('\n')
+	eventsInput = strings.TrimSpace(eventsInput)
+
+	availableEvents := []string{
+		"health_check.failed",
+		"health_check.recovered",
+		"alert.triggered",
+		"alert.resolved",
+		"trace.error",
+		"anomaly.detected",
+	}
+
+	// Parse selected events
+	selectedEvents := []string{}
+	if eventsInput != "" {
+		selections := strings.Split(eventsInput, ",")
+		for _, sel := range selections {
+			sel = strings.TrimSpace(sel)
+			var eventNum int
+			fmt.Sscanf(sel, "%d", &eventNum)
+			if eventNum >= 1 && eventNum <= len(availableEvents) {
+				selectedEvents = append(selectedEvents, availableEvents[eventNum-1])
+			}
+		}
+	}
+
+	if len(selectedEvents) == 0 {
+		return fmt.Errorf("at least one event must be selected")
+	}
+
+	// Create webhook via API
+	payload := map[string]interface{}{
+		"name":        name,
+		"url":         url,
+		"description": description,
+		"events":      selectedEvents,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to create payload: %w", err)
+	}
+
+	// Use the API client's base URL
+	req, err := http.NewRequest("POST", apiClient.BaseURL+"/v1/webhooks", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", cfg.APIKey)
+
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create webhook: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("failed to create webhook: %s", string(body))
+	}
+
+	// Parse response
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	webhookID := result["id"].(string)
+	secret := result["secret"].(string)
+
+	// Save to .env
+	envPath := ".env"
+	envFile, err := os.OpenFile(envPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		ui.PrintWarning(fmt.Sprintf("Could not save webhook to .env: %v", err))
+	} else {
+		defer envFile.Close()
+		envFile.WriteString(fmt.Sprintf("\n# Webhook Configuration\n"))
+		envFile.WriteString(fmt.Sprintf("TRACEKIT_WEBHOOK_ID=%s\n", webhookID))
+		envFile.WriteString(fmt.Sprintf("TRACEKIT_WEBHOOK_URL=%s\n", url))
+		envFile.WriteString(fmt.Sprintf("TRACEKIT_WEBHOOK_SECRET=%s\n", secret))
+	}
+
+	fmt.Println()
+	ui.PrintSuccess("✅ Webhook created successfully!")
+	fmt.Println()
+	ui.PrintInfo(fmt.Sprintf("Webhook ID: %s", webhookID))
+	ui.PrintInfo(fmt.Sprintf("URL: %s", url))
+	fmt.Println()
+	ui.PrintWarning("⚠️  IMPORTANT: Your webhook secret has been saved to .env")
+	ui.PrintMuted(fmt.Sprintf("   Secret: %s", secret))
+	ui.PrintMuted("   Use this secret to verify webhook signatures")
+	fmt.Println()
+	ui.PrintInfo("Subscribed to events:")
+	for _, event := range selectedEvents {
+		ui.PrintMuted(fmt.Sprintf("   • %s", event))
+	}
 
 	return nil
 }
