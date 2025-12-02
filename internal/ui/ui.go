@@ -3,30 +3,44 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 var (
-	// Colors
-	primaryColor   = lipgloss.Color("#2563eb") // blue
-	successColor   = lipgloss.Color("#16a34a") // green
-	warningColor   = lipgloss.Color("#f59e0b") // amber
-	mutedColor     = lipgloss.Color("#6b7280") // gray
-	dangerColor    = lipgloss.Color("#dc2626") // red
+	// Premium color palette
+	brandColor     = lipgloss.Color("#6366f1") // Indigo - primary brand
+	accentColor    = lipgloss.Color("#8b5cf6") // Purple - accent
+	successColor   = lipgloss.Color("#10b981") // Emerald - success
+	warningColor   = lipgloss.Color("#f59e0b") // Amber - warning
+	dangerColor    = lipgloss.Color("#ef4444") // Red - error
+	mutedColor     = lipgloss.Color("#9ca3af") // Gray - muted
+	subtleColor    = lipgloss.Color("#374151") // Dark gray - subtle
+	highlightColor = lipgloss.Color("#fbbf24") // Yellow - highlight
+
+	// Gradient colors
+	gradientStart = lipgloss.Color("#6366f1")
+	gradientEnd   = lipgloss.Color("#8b5cf6")
 
 	// Styles
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(primaryColor).
+			Foreground(brandColor).
 			Align(lipgloss.Center).
 			Padding(1, 2)
 
 	boxStyle = lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(brandColor).
+			Padding(1, 3).
+			Width(65)
+
+	fancyBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryColor).
-			Padding(1, 2).
-			Width(60)
+			BorderForeground(brandColor).
+			Padding(1, 3).
+			Width(65)
 
 	successStyle = lipgloss.NewStyle().
 			Foreground(successColor).
@@ -36,66 +50,114 @@ var (
 			Foreground(warningColor).
 			Bold(true)
 
+	errorStyle = lipgloss.NewStyle().
+			Foreground(dangerColor).
+			Bold(true)
+
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
 
+	subtleStyle = lipgloss.NewStyle().
+			Foreground(subtleColor).
+			Italic(true)
+
 	promptStyle = lipgloss.NewStyle().
-			Foreground(primaryColor).
+			Foreground(brandColor).
+			Bold(true)
+
+	highlightStyle = lipgloss.NewStyle().
+			Foreground(highlightColor).
 			Bold(true)
 
 	bulletStyle = lipgloss.NewStyle().
-			Foreground(primaryColor).
+			Foreground(brandColor).
 			MarginLeft(2)
+
+	sectionStyle = lipgloss.NewStyle().
+			Foreground(brandColor).
+			Bold(true).
+			Padding(0, 1)
 )
 
 // PrintBanner prints the welcome banner
 func PrintBanner() {
-	banner := `
-╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║              🚀 Welcome to TraceKit CLI                    ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
+	// ASCII art logo
+	logo := lipgloss.NewStyle().
+		Foreground(brandColor).
+		Bold(true).
+		Render(`
+  ████████╗██████╗  █████╗  ██████╗███████╗██╗  ██╗██╗████████╗
+  ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝██║ ██╔╝██║╚══██╔══╝
+     ██║   ██████╔╝███████║██║     █████╗  █████╔╝ ██║   ██║
+     ██║   ██╔══██╗██╔══██║██║     ██╔══╝  ██╔═██╗ ██║   ██║
+     ██║   ██║  ██║██║  ██║╚██████╗███████╗██║  ██╗██║   ██║
+     ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝
+`)
 
-Zero-friction APM setup for modern applications.
-Get production monitoring in under 60 seconds.
+	tagline := lipgloss.NewStyle().
+		Foreground(accentColor).
+		Italic(true).
+		Align(lipgloss.Center).
+		Width(65).
+		Render("Zero-friction APM for modern applications")
 
-⚡ Features:
-  • Automatic framework detection
-  • Instant account creation
-  • 200k free traces per month
-  • Partner revenue sharing
-  • Beautiful dashboards
+	features := lipgloss.NewStyle().
+		Foreground(mutedColor).
+		MarginTop(1).
+		Render(`
+  ⚡ Auto-detect framework    🔑 Instant account setup
+  📊 200k free traces/month   🎨 Beautiful dashboards
+`)
 
-Let's get you set up!
-`
-	fmt.Println(lipgloss.NewStyle().Foreground(primaryColor).Render(banner))
+	fmt.Println(logo)
+	fmt.Println(tagline)
+	fmt.Println(features)
+	fmt.Println()
 }
 
-// PrintSection prints a boxed section title
+// PrintSection prints a premium section header
 func PrintSection(title string) {
-	section := fmt.Sprintf("\n╭─────────────────────────────────────────────────────────────╮\n│  %s\n╰─────────────────────────────────────────────────────────────╯", title)
-	fmt.Println(lipgloss.NewStyle().Foreground(primaryColor).Render(section))
+	// Create a more premium section header
+	header := lipgloss.NewStyle().
+		Foreground(brandColor).
+		Bold(true).
+		Padding(0, 2).
+		Render(title)
+
+	bar := lipgloss.NewStyle().
+		Foreground(accentColor).
+		Render(strings.Repeat("━", 65))
+
+	fmt.Println()
+	fmt.Println(bar)
+	fmt.Println(header)
+	fmt.Println(bar)
+	fmt.Println()
 }
 
 // PrintSuccess prints a success message
 func PrintSuccess(msg string) {
-	fmt.Println(successStyle.Render("✅ " + msg))
+	icon := lipgloss.NewStyle().Foreground(successColor).Render("✓")
+	fmt.Printf("%s %s\n", icon, successStyle.Render(msg))
 }
 
 // PrintError prints an error message
 func PrintError(msg string) {
-	fmt.Println(lipgloss.NewStyle().Foreground(dangerColor).Bold(true).Render("❌ " + msg))
+	icon := lipgloss.NewStyle().Foreground(dangerColor).Render("✗")
+	fmt.Printf("%s %s\n", icon, errorStyle.Render(msg))
 }
 
 // PrintWarning prints a warning message
 func PrintWarning(msg string) {
-	fmt.Println(warningStyle.Render("⚠️  " + msg))
+	icon := lipgloss.NewStyle().Foreground(warningColor).Render("⚠")
+	fmt.Printf("%s %s\n", icon, warningStyle.Render(msg))
 }
 
 // PrintInfo prints an info message
 func PrintInfo(msg string) {
-	fmt.Println(lipgloss.NewStyle().Foreground(primaryColor).Render("ℹ️  " + msg))
+	icon := lipgloss.NewStyle().Foreground(brandColor).Render("●")
+	text := lipgloss.NewStyle().Foreground(brandColor).Render(msg)
+	fmt.Printf("%s %s\n", icon, text)
 }
 
 // PrintMuted prints a muted message
@@ -103,56 +165,117 @@ func PrintMuted(msg string) {
 	fmt.Println(mutedStyle.Render(msg))
 }
 
-// PrintPrompt prints a prompt for user input
+// PrintSubtle prints a subtle/secondary message
+func PrintSubtle(msg string) {
+	fmt.Println(subtleStyle.Render(msg))
+}
+
+// PrintHighlight prints a highlighted message
+func PrintHighlight(msg string) {
+	fmt.Println(highlightStyle.Render(msg))
+}
+
+// PrintPrompt prints a premium prompt for user input
 func PrintPrompt(msg string) {
-	fmt.Print(promptStyle.Render("❯ " + msg + " "))
+	prompt := lipgloss.NewStyle().
+		Foreground(brandColor).
+		Bold(true).
+		Render("▸ " + msg)
+	fmt.Print(prompt + " ")
 }
 
 // PrintBullet prints a bulleted item
 func PrintBullet(msg string) {
-	fmt.Println(bulletStyle.Render("• " + msg))
+	bullet := lipgloss.NewStyle().Foreground(brandColor).Render("  •")
+	fmt.Printf("%s %s\n", bullet, msg)
 }
 
-// PrintSummaryBox prints a boxed summary
+// PrintSummaryBox prints a premium boxed summary
 func PrintSummaryBox(title, content string) {
+	titleBar := lipgloss.NewStyle().
+		Foreground(successColor).
+		Bold(true).
+		Padding(0, 1).
+		Render(title)
+
+	contentStyle := lipgloss.NewStyle().
+		Foreground(mutedColor).
+		Padding(1, 0)
+
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(successColor).
-		Padding(1, 2).
-		Width(60).
-		Render(fmt.Sprintf("%s\n\n%s",
-			lipgloss.NewStyle().Bold(true).Render(title),
-			content))
+		Padding(2, 4).
+		Width(65).
+		Render(fmt.Sprintf("%s\n\n%s", titleBar, contentStyle.Render(content)))
 
 	fmt.Println(box)
 }
 
 // PrintKeyValue prints a key-value pair
 func PrintKeyValue(key, value string) {
-	keyStyle := lipgloss.NewStyle().Foreground(mutedColor).Width(20)
-	valueStyle := lipgloss.NewStyle().Bold(true)
+	keyStyle := lipgloss.NewStyle().
+		Foreground(mutedColor).
+		Width(20)
+	valueStyle := lipgloss.NewStyle().
+		Foreground(brandColor).
+		Bold(true)
 	fmt.Printf("%s %s\n", keyStyle.Render(key+":"), valueStyle.Render(value))
 }
 
 // PrintDivider prints a horizontal divider
 func PrintDivider() {
-	divider := strings.Repeat("─", 62)
-	fmt.Println(mutedStyle.Render(divider))
+	divider := lipgloss.NewStyle().
+		Foreground(subtleColor).
+		Render(strings.Repeat("─", 65))
+	fmt.Println(divider)
 }
 
 // PrintNextSteps prints the next steps section
 func PrintNextSteps(steps []string) {
-	fmt.Println()
-	PrintSection("📖 Next Steps")
-	fmt.Println()
+	PrintSection("📋 Next Steps")
 
 	for i, step := range steps {
-		fmt.Printf("  %s %s\n",
-			lipgloss.NewStyle().Foreground(primaryColor).Bold(true).Render(fmt.Sprintf("%d.", i+1)),
-			step)
+		number := lipgloss.NewStyle().
+			Foreground(brandColor).
+			Bold(true).
+			Render(fmt.Sprintf("  %d.", i+1))
+
+		fmt.Printf("%s %s\n", number, step)
 	}
 	fmt.Println()
 }
 
-// Spinner characters for loading animations
-var SpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// PrintSpinner shows a loading spinner with a message
+func PrintSpinner(msg string) {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	for i := 0; i < 10; i++ {
+		frame := lipgloss.NewStyle().
+			Foreground(brandColor).
+			Render(frames[i%len(frames)])
+		fmt.Printf("\r%s %s", frame, msg)
+		time.Sleep(80 * time.Millisecond)
+	}
+	fmt.Print("\r" + strings.Repeat(" ", len(msg)+10) + "\r")
+}
+
+// PrintProgress shows a progress indicator
+func PrintProgress(current, total int, msg string) {
+	percent := float64(current) / float64(total) * 100
+	filled := int(percent / 5)
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", 20-filled)
+
+	progressBar := lipgloss.NewStyle().
+		Foreground(brandColor).
+		Render(bar)
+
+	percentText := lipgloss.NewStyle().
+		Foreground(accentColor).
+		Bold(true).
+		Render(fmt.Sprintf("%3.0f%%", percent))
+
+	fmt.Printf("\r%s %s %s", progressBar, percentText, msg)
+	if current == total {
+		fmt.Println()
+	}
+}
