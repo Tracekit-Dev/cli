@@ -76,7 +76,7 @@ func SendTrace(cfg *config.Config, trace map[string]interface{}) error {
 	// Determine endpoint
 	endpoint := cfg.Endpoint
 	if endpoint == "" {
-		endpoint = "https://api.tracekit.dev/v1/traces"
+		endpoint = "https://app.tracekit.dev/v1/traces"
 	}
 
 	// Prepare request body

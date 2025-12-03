@@ -11,7 +11,7 @@ import (
 
 const (
 	// DefaultBaseURL is the production API endpoint
-	DefaultBaseURL = "https://api.tracekit.dev"
+	DefaultBaseURL = "https://app.tracekit.dev"
 	// DevBaseURL is the development API endpoint
 	DevBaseURL = "http://localhost:8081"
 )

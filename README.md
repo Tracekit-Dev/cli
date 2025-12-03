@@ -334,7 +334,7 @@ Send heartbeats every 60 seconds to indicate service health.
 
 **Using API:**
 ```bash
-curl -X POST https://api.tracekit.dev/v1/health/heartbeat \
+curl -X POST https://app.tracekit.dev/v1/health/heartbeat \
   -H "X-API-Key: $TRACEKIT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -378,7 +378,7 @@ TraceKit automatically creates/updates your `.env` file:
 ```bash
 # TraceKit Configuration
 TRACEKIT_API_KEY=ctxio_abc123def456...
-TRACEKIT_ENDPOINT=https://api.tracekit.dev/v1/traces
+TRACEKIT_ENDPOINT=https://app.tracekit.dev/v1/traces
 TRACEKIT_SERVICE_NAME=my-app
 TRACEKIT_ENABLED=true
 TRACEKIT_CODE_MONITORING_ENABLED=true

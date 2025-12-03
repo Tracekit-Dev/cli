@@ -9,7 +9,7 @@ import (
 // Config represents TraceKit configuration
 type Config struct {
 	APIKey                string
-	Endpoint              string // Base API URL (e.g., http://localhost:8081 or https://api.tracekit.dev)
+	Endpoint              string // Base API URL (e.g., http://localhost:8081 or https://app.tracekit.dev)
 	ServiceName           string
 	Enabled               string
 	CodeMonitoringEnabled string
@@ -18,7 +18,7 @@ type Config struct {
 // GetTraceEndpoint returns the full trace ingestion endpoint
 func (c *Config) GetTraceEndpoint() string {
 	if c.Endpoint == "" {
-		return "https://api.tracekit.dev/v1/traces"
+		return "https://app.tracekit.dev/v1/traces"
 	}
 	return c.Endpoint + "/v1/traces"
 }
@@ -26,7 +26,7 @@ func (c *Config) GetTraceEndpoint() string {
 // GetAPIBase returns the base API URL for v1 endpoints
 func (c *Config) GetAPIBase() string {
 	if c.Endpoint == "" {
-		return "https://api.tracekit.dev"
+		return "https://app.tracekit.dev"
 	}
 	return c.Endpoint
 }

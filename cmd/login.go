@@ -34,7 +34,7 @@ Example:
 func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().String("email", "", "Your email address")
-	loginCmd.Flags().String("api-url", "", "API base URL (default: https://api.tracekit.dev)")
+	loginCmd.Flags().String("api-url", "", "API base URL (default: https://app.tracekit.dev)")
 	loginCmd.Flags().Bool("dev", false, "")
 	loginCmd.Flags().MarkHidden("dev")
 }

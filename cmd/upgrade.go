@@ -37,7 +37,7 @@ Example:
 
 func init() {
 	rootCmd.AddCommand(upgradeCmd)
-	upgradeCmd.Flags().String("api-url", "", "API base URL (default: https://api.tracekit.dev)")
+	upgradeCmd.Flags().String("api-url", "", "API base URL (default: https://app.tracekit.dev)")
 	upgradeCmd.Flags().Bool("dev", false, "")
 	upgradeCmd.Flags().MarkHidden("dev")
 }
