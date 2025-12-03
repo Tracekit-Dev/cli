@@ -30,5 +30,5 @@ func Execute() error {
 
 func init() {
 	// Custom version template
-	rootCmd.SetVersionTemplate(fmt.Sprintf("TraceKit CLI v%s\n", Version))
+	rootCmd.SetVersionTemplate(fmt.Sprintf("TraceKit CLI %s\n", Version))
 }
