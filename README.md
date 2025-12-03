@@ -28,13 +28,19 @@ That's it! This single command will:
 
 ## 📦 Installation
 
-### Quick Install (Recommended)
+### Homebrew (macOS & Linux)
+
+```bash
+brew install Tracekit-Dev/tap/tracekit
+```
+
+### Quick Install Script
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Tracekit-Dev/cli/main/install.sh | sh
 ```
 
-### Alternative Methods
+### Manual Download
 
 **macOS (Apple Silicon)**
 ```bash
