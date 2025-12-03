@@ -1,8 +1,13 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 )
+
+// Version is set by main.go via ldflags
+var Version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:   "tracekit",
@@ -15,6 +20,7 @@ Examples:
   tracekit login             Login to existing account
   tracekit status            Show configuration and usage
   tracekit upgrade           Upgrade your subscription plan`,
+	Version: Version,
 }
 
 // Execute runs the root command
@@ -23,6 +29,6 @@ func Execute() error {
 }
 
 func init() {
-	// Global flags can be added here
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.tracekit.yaml)")
+	// Custom version template
+	rootCmd.SetVersionTemplate(fmt.Sprintf("TraceKit CLI v%s\n", Version))
 }

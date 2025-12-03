@@ -1,6 +1,49 @@
 # TraceKit CLI
 
-Zero-friction APM setup via command line.
+Zero-friction APM setup via command line. Create an account, get an API key, and start monitoring your application in under 60 seconds.
+
+## Installation
+
+### Quick Install (Recommended)
+
+```bash
+curl -fsSL https://cli.tracekit.dev/install.sh | sh
+```
+
+### Alternative Methods
+
+**Download Latest Release:**
+```bash
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/Tracekit-Dev/cli/releases/latest/download/tracekit-darwin-arm64 -o tracekit
+chmod +x tracekit
+sudo mv tracekit /usr/local/bin/
+
+# macOS (Intel)
+curl -fsSL https://github.com/Tracekit-Dev/cli/releases/latest/download/tracekit-darwin-amd64 -o tracekit
+chmod +x tracekit
+sudo mv tracekit /usr/local/bin/
+
+# Linux (x64)
+curl -fsSL https://github.com/Tracekit-Dev/cli/releases/latest/download/tracekit-linux-amd64 -o tracekit
+chmod +x tracekit
+sudo mv tracekit /usr/local/bin/
+
+# Linux (ARM64)
+curl -fsSL https://github.com/Tracekit-Dev/cli/releases/latest/download/tracekit-linux-arm64 -o tracekit
+chmod +x tracekit
+sudo mv tracekit /usr/local/bin/
+
+# Windows (x64)
+# Download from: https://github.com/Tracekit-Dev/cli/releases/latest/download/tracekit-windows-amd64.exe
+```
+
+**Build from Source:**
+```bash
+git clone https://github.com/Tracekit-Dev/cli.git
+cd cli
+go build -o tracekit .
+```
 
 ## Features
 
@@ -9,25 +52,29 @@ Zero-friction APM setup via command line.
 - `tracekit login` - Login to existing account
 - `tracekit status` - Show configuration and integration status
 - `tracekit test` - Send a test trace
-
-🚧 **Not implemented yet:**
-- SDK auto-installation (composer/npm/pip)
-- Package distribution (npm, Homebrew)
+- `tracekit health setup` - Configure health check monitoring
+- `tracekit health list` - List configured health checks
+- `tracekit upgrade` - Upgrade subscription plan
+- SDK auto-installation (composer/npm/pip/go)
+- Framework auto-detection (10+ frameworks)
 
 ## Quick Start
 
 ```bash
 # Initialize a new project (first time)
-./bin/tracekit init
+tracekit init
 
 # Login to existing account (existing user)
-./bin/tracekit login
+tracekit login
 
 # Check your setup
-./bin/tracekit status
+tracekit status
 
 # Send a test trace
-./bin/tracekit test
+tracekit test
+
+# Upgrade your plan
+tracekit upgrade
 ```
 
 ## Commands
