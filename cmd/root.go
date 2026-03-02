@@ -6,8 +6,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is set by main.go via ldflags
+// Version, CommitHash, and BuildDate are set via ldflags at build time
 var Version = "dev"
+var CommitHash = "unknown"
+var BuildDate = "unknown"
 
 var rootCmd = &cobra.Command{
 	Use:   "tracekit",
@@ -19,7 +21,8 @@ Examples:
   tracekit init              Initialize TraceKit in your project
   tracekit login             Login to existing account
   tracekit status            Show configuration and usage
-  tracekit upgrade           Upgrade your subscription plan`,
+  tracekit upgrade           Upgrade your subscription plan
+  tracekit update            Update the CLI to the latest version`,
 	Version: Version,
 }
 
@@ -29,6 +32,6 @@ func Execute() error {
 }
 
 func init() {
-	// Custom version template
-	rootCmd.SetVersionTemplate(fmt.Sprintf("TraceKit CLI %s\n", Version))
+	// Custom version template with commit hash and build date
+	rootCmd.SetVersionTemplate(fmt.Sprintf("tracekit v%s (%s, %s)\n", Version, CommitHash, BuildDate))
 }

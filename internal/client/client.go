@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"time"
 )
 
@@ -199,6 +201,221 @@ func (c *Client) GetStatus() (map[string]interface{}, error) {
 	return status, nil
 }
 
+// Release and Deploy request/response types
+
+// CreateReleaseRequest is the request body for creating a release
+type CreateReleaseRequest struct {
+	Version     string `json:"version"`
+	CommitSHA   string `json:"commit_sha,omitempty"`
+	CommitRange string `json:"commit_range,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Author      string `json:"author,omitempty"`
+}
+
+// CreateReleaseResponse is the response from creating or retrieving a release
+type CreateReleaseResponse struct {
+	ID          string  `json:"id"`
+	Version     string  `json:"version"`
+	Source      string  `json:"source"`
+	CommitSHA   string  `json:"commit_sha,omitempty"`
+	CommitRange string  `json:"commit_range,omitempty"`
+	URL         string  `json:"url,omitempty"`
+	Author      string  `json:"author,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+	FinalizedAt *string `json:"finalized_at,omitempty"`
+}
+
+// CreateDeployRequest is the request body for registering a deploy
+type CreateDeployRequest struct {
+	Environment string `json:"environment"`
+	Deployer    string `json:"deployer,omitempty"`
+}
+
+// CreateDeployResponse is the response from registering a deploy
+type CreateDeployResponse struct {
+	ID          string `json:"id"`
+	ReleaseID   string `json:"release_id"`
+	Environment string `json:"environment"`
+	Deployer    string `json:"deployer,omitempty"`
+	DeployedAt  string `json:"deployed_at"`
+}
+
+// ReleaseListResponse is the paginated list of releases
+type ReleaseListResponse struct {
+	Releases     []CreateReleaseResponse `json:"releases"`
+	Total        int                     `json:"total"`
+	Page         int                     `json:"page"`
+	PageSize     int                     `json:"page_size"`
+	Environments []string                `json:"environments"`
+}
+
+// CreateRelease creates a new release via the API.
+// Returns (release, isNew, error). isNew is true if the release was newly created (201),
+// false if it already existed (200/409). This supports idempotent behavior.
+func (c *Client) CreateRelease(req *CreateReleaseRequest) (*CreateReleaseResponse, bool, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/api/releases", bytes.NewReader(body))
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, false, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusCreated:
+		var release CreateReleaseResponse
+		if err := json.Unmarshal(respBody, &release); err != nil {
+			return nil, false, fmt.Errorf("failed to parse response: %w", err)
+		}
+		return &release, true, nil
+	case http.StatusOK, http.StatusConflict:
+		var release CreateReleaseResponse
+		if err := json.Unmarshal(respBody, &release); err != nil {
+			return nil, false, fmt.Errorf("failed to parse response: %w", err)
+		}
+		return &release, false, nil
+	default:
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return nil, false, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, false, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+}
+
+// FinalizeRelease marks a release as finalized via PATCH /api/releases/{version}.
+func (c *Client) FinalizeRelease(version string) (*CreateReleaseResponse, error) {
+	httpReq, err := http.NewRequest("PATCH", c.BaseURL+"/api/releases/"+version, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var release CreateReleaseResponse
+	if err := json.Unmarshal(respBody, &release); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &release, nil
+}
+
+// CreateDeploy registers a deploy for a release via POST /api/releases/{version}/deploys.
+func (c *Client) CreateDeploy(version string, req *CreateDeployRequest) (*CreateDeployResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/api/releases/"+version+"/deploys", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var deploy CreateDeployResponse
+	if err := json.Unmarshal(respBody, &deploy); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &deploy, nil
+}
+
+// ListReleases retrieves a paginated list of releases via GET /api/releases.
+func (c *Client) ListReleases(page, pageSize int) (*ReleaseListResponse, error) {
+	url := fmt.Sprintf("%s/api/releases?page=%d&page_size=%d", c.BaseURL, page, pageSize)
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var listResp ReleaseListResponse
+	if err := json.Unmarshal(respBody, &listResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &listResp, nil
+}
+
 // PostHealthCheck creates a new health check configuration
 func (c *Client) PostHealthCheck(apiURL, apiKey string, requestBody map[string]interface{}) error {
 	body, err := json.Marshal(requestBody)
@@ -234,4 +451,132 @@ func (c *Client) PostHealthCheck(apiURL, apiKey string, requestBody map[string]i
 	}
 
 	return nil
+}
+
+// Source Map request/response types
+
+// SourceMapUploadResponse is the response from uploading a source map
+type SourceMapUploadResponse struct {
+	ID        string `json:"id"`
+	DebugID   string `json:"debug_id"`
+	Release   string `json:"release,omitempty"`
+	Filename  string `json:"filename"`
+	SizeBytes int64  `json:"size_bytes"`
+	CreatedAt string `json:"created_at"`
+}
+
+// SourceMapDeleteResponse is the response from deleting source maps
+type SourceMapDeleteResponse struct {
+	DeletedCount int    `json:"deleted_count"`
+	Release      string `json:"release"`
+}
+
+// UploadSourceMap uploads a source map file via multipart POST to /api/sourcemaps.
+// Uses a 60-second timeout for large uploads.
+func (c *Client) UploadSourceMap(debugID, release, filename string, mapData []byte) (*SourceMapUploadResponse, error) {
+	// Build multipart form body
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Add debug_id field
+	if err := writer.WriteField("debug_id", debugID); err != nil {
+		return nil, fmt.Errorf("failed to write debug_id field: %w", err)
+	}
+
+	// Add release field
+	if release != "" {
+		if err := writer.WriteField("release", release); err != nil {
+			return nil, fmt.Errorf("failed to write release field: %w", err)
+		}
+	}
+
+	// Add sourcemap file
+	part, err := writer.CreateFormFile("sourcemap", filepath.Base(filename))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+	if _, err := part.Write(mapData); err != nil {
+		return nil, fmt.Errorf("failed to write file data: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/api/sourcemaps", &buf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	// Use longer timeout for large uploads
+	uploadClient := &http.Client{
+		Timeout: 60 * time.Second,
+	}
+
+	resp, err := uploadClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var uploadResp SourceMapUploadResponse
+	if err := json.Unmarshal(respBody, &uploadResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &uploadResp, nil
+}
+
+// DeleteSourceMaps deletes all source maps for a release via DELETE /api/sourcemaps?release={release}.
+func (c *Client) DeleteSourceMaps(release string) (*SourceMapDeleteResponse, error) {
+	url := fmt.Sprintf("%s/api/sourcemaps?release=%s", c.BaseURL, release)
+
+	httpReq, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var deleteResp SourceMapDeleteResponse
+	if err := json.Unmarshal(respBody, &deleteResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &deleteResp, nil
 }

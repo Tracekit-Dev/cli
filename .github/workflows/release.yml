@@ -47,7 +47,7 @@ jobs:
           fi
 
           # Build binary
-          go build -ldflags="-s -w -X github.com/yourusername/context.io/cli/cmd.Version=${{ steps.version.outputs.VERSION }}" -o "${BINARY_NAME}" .
+          go build -ldflags="-s -w -X github.com/yourusername/context.io/cli/cmd.Version=${{ steps.version.outputs.VERSION }} -X github.com/yourusername/context.io/cli/cmd.CommitHash=$(git rev-parse --short HEAD) -X github.com/yourusername/context.io/cli/cmd.BuildDate=$(date -u +%Y-%m-%d)" -o "${BINARY_NAME}" .
 
           # Rename to platform-specific name
           PLATFORM_NAME="tracekit-${{ matrix.goos }}-${{ matrix.goarch }}"
