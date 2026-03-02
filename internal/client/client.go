@@ -206,6 +206,7 @@ func (c *Client) GetStatus() (map[string]interface{}, error) {
 // CreateReleaseRequest is the request body for creating a release
 type CreateReleaseRequest struct {
 	Version     string `json:"version"`
+	ServiceName string `json:"service_name,omitempty"`
 	CommitSHA   string `json:"commit_sha,omitempty"`
 	CommitRange string `json:"commit_range,omitempty"`
 	URL         string `json:"url,omitempty"`
@@ -216,6 +217,7 @@ type CreateReleaseRequest struct {
 type CreateReleaseResponse struct {
 	ID          string  `json:"id"`
 	Version     string  `json:"version"`
+	ServiceName string  `json:"service_name,omitempty"`
 	Source      string  `json:"source"`
 	CommitSHA   string  `json:"commit_sha,omitempty"`
 	CommitRange string  `json:"commit_range,omitempty"`
@@ -247,6 +249,7 @@ type ReleaseListResponse struct {
 	Page         int                     `json:"page"`
 	PageSize     int                     `json:"page_size"`
 	Environments []string                `json:"environments"`
+	Services     []string                `json:"services"`
 }
 
 // CreateRelease creates a new release via the API.
@@ -300,8 +303,12 @@ func (c *Client) CreateRelease(req *CreateReleaseRequest) (*CreateReleaseRespons
 }
 
 // FinalizeRelease marks a release as finalized via PATCH /api/releases/{version}.
-func (c *Client) FinalizeRelease(version string) (*CreateReleaseResponse, error) {
-	httpReq, err := http.NewRequest("PATCH", c.BaseURL+"/api/releases/"+version, nil)
+func (c *Client) FinalizeRelease(version, service string) (*CreateReleaseResponse, error) {
+	reqURL := c.BaseURL + "/api/releases/" + version
+	if service != "" {
+		reqURL += "?service=" + service
+	}
+	httpReq, err := http.NewRequest("PATCH", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -337,13 +344,17 @@ func (c *Client) FinalizeRelease(version string) (*CreateReleaseResponse, error)
 }
 
 // CreateDeploy registers a deploy for a release via POST /api/releases/{version}/deploys.
-func (c *Client) CreateDeploy(version string, req *CreateDeployRequest) (*CreateDeployResponse, error) {
+func (c *Client) CreateDeploy(version, service string, req *CreateDeployRequest) (*CreateDeployResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.BaseURL+"/api/releases/"+version+"/deploys", bytes.NewReader(body))
+	reqURL := c.BaseURL + "/api/releases/" + version + "/deploys"
+	if service != "" {
+		reqURL += "?service=" + service
+	}
+	httpReq, err := http.NewRequest("POST", reqURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -379,8 +390,11 @@ func (c *Client) CreateDeploy(version string, req *CreateDeployRequest) (*Create
 }
 
 // ListReleases retrieves a paginated list of releases via GET /api/releases.
-func (c *Client) ListReleases(page, pageSize int) (*ReleaseListResponse, error) {
+func (c *Client) ListReleases(page, pageSize int, service string) (*ReleaseListResponse, error) {
 	url := fmt.Sprintf("%s/api/releases?page=%d&page_size=%d", c.BaseURL, page, pageSize)
+	if service != "" {
+		url += "&service=" + service
+	}
 
 	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {

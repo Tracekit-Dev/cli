@@ -71,6 +71,7 @@ func runReleasesDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	env, _ := cmd.Flags().GetString("env")
+	service, _ := cmd.Flags().GetString("service")
 	commitSHA, _ := cmd.Flags().GetString("commit")
 	if commitSHA == "" {
 		commitSHA = version.GetGitCommitSHA()
@@ -85,10 +86,11 @@ func runReleasesDeploy(cmd *cobra.Command, args []string) error {
 
 	// Step 1: Create release (idempotent)
 	releaseReq := &client.CreateReleaseRequest{
-		Version:   ver,
-		CommitSHA: commitSHA,
-		URL:       releaseURL,
-		Author:    author,
+		Version:     ver,
+		ServiceName: service,
+		CommitSHA:   commitSHA,
+		URL:         releaseURL,
+		Author:      author,
 	}
 
 	if commitSHA != "" {
@@ -106,13 +108,13 @@ func runReleasesDeploy(cmd *cobra.Command, args []string) error {
 		Deployer:    deployer,
 	}
 
-	deploy, err := c.CreateDeploy(ver, deployReq)
+	deploy, err := c.CreateDeploy(ver, service, deployReq)
 	if err != nil {
 		return fmt.Errorf("failed to register deploy: %w", err)
 	}
 
 	// Step 3: Finalize release
-	finalizedRelease, err := c.FinalizeRelease(ver)
+	finalizedRelease, err := c.FinalizeRelease(ver, service)
 	if err != nil {
 		return fmt.Errorf("failed to finalize release: %w", err)
 	}

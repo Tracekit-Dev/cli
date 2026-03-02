@@ -49,13 +49,14 @@ func runReleasesList(cmd *cobra.Command, args []string) error {
 
 	page, _ := cmd.Flags().GetInt("page")
 	pageSize, _ := cmd.Flags().GetInt("page-size")
+	service, _ := cmd.Flags().GetString("service")
 
 	// Create client
 	c := client.NewClient(cfg.GetAPIBase())
 	c.APIKey = cfg.APIKey
 
 	// List releases
-	result, err := c.ListReleases(page, pageSize)
+	result, err := c.ListReleases(page, pageSize, service)
 	if err != nil {
 		return fmt.Errorf("failed to list releases: %w", err)
 	}
@@ -79,8 +80,8 @@ func runReleasesList(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("\nReleases (page %d, %d total):\n\n", result.Page, result.Total)
-	fmt.Printf("  %-20s %-15s %-20s %-20s\n", "VERSION", "SOURCE", "CREATED", "FINALIZED")
-	fmt.Printf("  %-20s %-15s %-20s %-20s\n", "-------", "------", "-------", "---------")
+	fmt.Printf("  %-20s %-20s %-15s %-20s %-20s\n", "VERSION", "SERVICE", "SOURCE", "CREATED", "FINALIZED")
+	fmt.Printf("  %-20s %-20s %-15s %-20s %-20s\n", "-------", "-------", "------", "-------", "---------")
 
 	for _, r := range result.Releases {
 		finalized := "-"
@@ -97,7 +98,12 @@ func runReleasesList(cmd *cobra.Command, args []string) error {
 			created = created[:19]
 		}
 
-		fmt.Printf("  %-20s %-15s %-20s %-20s\n", r.Version, r.Source, created, finalized)
+		svcName := r.ServiceName
+		if svcName == "" {
+			svcName = "-"
+		}
+
+		fmt.Printf("  %-20s %-20s %-15s %-20s %-20s\n", r.Version, svcName, r.Source, created, finalized)
 	}
 
 	if len(result.Environments) > 0 {

@@ -36,6 +36,7 @@ func init() {
 	releasesCmd.PersistentFlags().Bool("json", false, "Output in JSON format")
 	releasesCmd.PersistentFlags().Bool("dev", false, "Use development API endpoint")
 	releasesCmd.PersistentFlags().MarkHidden("dev")
+	releasesCmd.PersistentFlags().String("service", "", "Service name to scope the release to")
 
 	releasesCmd.AddCommand(releasesNewCmd)
 	releasesCmd.AddCommand(releasesFinalizeCmd)

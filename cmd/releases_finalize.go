@@ -56,12 +56,14 @@ func runReleasesFinalize(cmd *cobra.Command, args []string) error {
 		ver = detected
 	}
 
+	service, _ := cmd.Flags().GetString("service")
+
 	// Create client
 	c := client.NewClient(cfg.GetAPIBase())
 	c.APIKey = cfg.APIKey
 
 	// Finalize release
-	release, err := c.FinalizeRelease(ver)
+	release, err := c.FinalizeRelease(ver, service)
 	if err != nil {
 		return fmt.Errorf("failed to finalize release: %w", err)
 	}

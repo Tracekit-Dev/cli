@@ -65,6 +65,7 @@ func runDeploysNew(cmd *cobra.Command, args []string) error {
 
 	env, _ := cmd.Flags().GetString("env")
 	deployer, _ := cmd.Flags().GetString("deployer")
+	service, _ := cmd.Flags().GetString("service")
 
 	// Create client
 	c := client.NewClient(cfg.GetAPIBase())
@@ -76,7 +77,7 @@ func runDeploysNew(cmd *cobra.Command, args []string) error {
 		Deployer:    deployer,
 	}
 
-	deploy, err := c.CreateDeploy(ver, req)
+	deploy, err := c.CreateDeploy(ver, service, req)
 	if err != nil {
 		return fmt.Errorf("failed to register deploy: %w", err)
 	}

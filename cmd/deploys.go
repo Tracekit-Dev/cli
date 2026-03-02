@@ -29,6 +29,7 @@ func init() {
 	deploysCmd.PersistentFlags().Bool("json", false, "Output in JSON format")
 	deploysCmd.PersistentFlags().Bool("dev", false, "Use development API endpoint")
 	deploysCmd.PersistentFlags().MarkHidden("dev")
+	deploysCmd.PersistentFlags().String("service", "", "Service name to scope the deploy to")
 
 	deploysCmd.AddCommand(deploysNewCmd)
 }

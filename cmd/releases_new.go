@@ -73,6 +73,7 @@ func runReleasesNew(cmd *cobra.Command, args []string) error {
 
 	releaseURL, _ := cmd.Flags().GetString("url")
 	author, _ := cmd.Flags().GetString("author")
+	service, _ := cmd.Flags().GetString("service")
 
 	// Create client
 	c := client.NewClient(cfg.GetAPIBase())
@@ -80,10 +81,11 @@ func runReleasesNew(cmd *cobra.Command, args []string) error {
 
 	// Create release
 	req := &client.CreateReleaseRequest{
-		Version:   ver,
-		CommitSHA: commitSHA,
-		URL:       releaseURL,
-		Author:    author,
+		Version:     ver,
+		ServiceName: service,
+		CommitSHA:   commitSHA,
+		URL:         releaseURL,
+		Author:      author,
 	}
 
 	if commitSHA != "" {
