@@ -430,6 +430,89 @@ func (c *Client) ListReleases(page, pageSize int, service string) (*ReleaseListR
 	return &listResp, nil
 }
 
+// DashboardData holds the full dashboard response from /v1/alerts/dashboard
+type DashboardData struct {
+	Stats struct {
+		HealthScore float64 `json:"health_score"`
+		Services    int     `json:"services"`
+		TotalTraces int     `json:"total_traces"`
+		Errors24h   int     `json:"errors_24h"`
+		AvgResponse int     `json:"avg_response"`
+		Traces24h   int     `json:"traces_24h"`
+		ErrorRate   float64 `json:"error_rate"`
+		Deltas      struct {
+			HasPrevious bool    `json:"has_previous"`
+			Errors      float64 `json:"errors"`
+			AvgResponse float64 `json:"avg_response"`
+			Health      float64 `json:"health"`
+		} `json:"deltas"`
+	} `json:"stats"`
+	Services []struct {
+		Name        string  `json:"name"`
+		Traces      int     `json:"traces"`
+		Errors      int     `json:"errors"`
+		ErrorRate   float64 `json:"error_rate"`
+		AvgResponse int     `json:"avg_response"`
+	} `json:"services"`
+	Alerts struct {
+		Count int `json:"count"`
+		Items []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Severity    string `json:"severity"`
+			Message     string `json:"message"`
+			TriggeredAt string `json:"triggered_at"`
+			Duration    string `json:"duration"`
+		} `json:"items"`
+	} `json:"alerts"`
+	Anomalies struct {
+		Unacknowledged int `json:"unacknowledged"`
+		Critical       int `json:"critical"`
+	} `json:"anomalies"`
+	ErrorHotspots []struct {
+		Service   string  `json:"service"`
+		Operation string  `json:"operation"`
+		Total     int     `json:"total"`
+		Errors    int     `json:"errors"`
+		ErrorRate float64 `json:"error_rate"`
+	} `json:"error_hotspots"`
+	Timestamp string `json:"timestamp"`
+}
+
+// GetDashboard fetches the full dashboard data
+func (c *Client) GetDashboard() (*DashboardData, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/alerts/dashboard", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var data DashboardData
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &data, nil
+}
+
 // PostHealthCheck creates a new health check configuration
 func (c *Client) PostHealthCheck(apiURL, apiKey string, requestBody map[string]interface{}) error {
 	body, err := json.Marshal(requestBody)
