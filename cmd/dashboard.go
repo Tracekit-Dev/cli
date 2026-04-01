@@ -124,9 +124,16 @@ func (m dashModel) View() string {
 	}
 
 	w := m.width
-	if w < 60 {
-		w = 80
+	if w == 0 {
+		w = 80 // initial size before first WindowSizeMsg
 	}
+	if w < 40 {
+		return lipgloss.NewStyle().Foreground(cWarning).Padding(1, 1).Render(
+			"Terminal too narrow (min 40 cols)\nCurrent: " + fmt.Sprintf("%d", w) + " cols\nPlease widen your terminal.")
+	}
+
+	contentWidth := w - 2
+	isNarrow := w < 80
 
 	var b strings.Builder
 
@@ -156,14 +163,21 @@ func (m dashModel) View() string {
 	}
 
 	d := m.data
-	contentWidth := w - 2 // margin
 
 	// -- Row 1: Stat Cards --
-	b.WriteString(renderStatRow(d, contentWidth))
+	if isNarrow {
+		b.WriteString(renderStatRowNarrow(d, contentWidth))
+	} else {
+		b.WriteString(renderStatRow(d, contentWidth))
+	}
 
 	// -- Row 2: Charts (Throughput + Error Rate) --
 	if len(d.TimeSeries) > 1 {
-		b.WriteString(renderChartRow(d, contentWidth))
+		if isNarrow {
+			b.WriteString(renderChartRowNarrow(d, contentWidth))
+		} else {
+			b.WriteString(renderChartRow(d, contentWidth))
+		}
 	}
 
 	// -- Row 3: Latency Chart (P50/P95/P99) --
@@ -172,7 +186,11 @@ func (m dashModel) View() string {
 	}
 
 	// -- Row 4: Services + Alerts side by side --
-	b.WriteString(renderInfoRow(d, contentWidth))
+	if isNarrow {
+		b.WriteString(renderInfoRowNarrow(d, contentWidth))
+	} else {
+		b.WriteString(renderInfoRow(d, contentWidth))
+	}
 
 	// -- Row 5: Error Hotspots --
 	if len(d.ErrorHotspots) > 0 {
@@ -258,6 +276,68 @@ func renderStatRow(d *client.DashboardData, w int) string {
 	return " " + cards + "\n\n"
 }
 
+// -- Stat Cards Row (Narrow: 2 per row) --
+
+func renderStatRowNarrow(d *client.DashboardData, w int) string {
+	s := d.Stats
+	cardW := (w - 2) / 2 // 2 cards per row with 1 gap
+
+	makeCard := func(label, value string, valueColor lipgloss.TerminalColor, delta string) string {
+		labelStr := lipgloss.NewStyle().Foreground(cMuted).Render(label)
+		valueStr := lipgloss.NewStyle().Foreground(valueColor).Bold(true).Render(value)
+		content := labelStr + "\n" + valueStr
+		if delta != "" {
+			content += "\n" + delta
+		}
+		return lipgloss.NewStyle().
+			Width(cardW).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(cBorder).
+			Padding(0, 1).
+			Render(content)
+	}
+
+	healthColor := cSuccess
+	if s.HealthScore < 80 {
+		healthColor = cWarning
+	}
+	if s.HealthScore < 60 {
+		healthColor = cDanger
+	}
+
+	healthDelta := ""
+	errDelta := ""
+	avgDelta := ""
+	if s.Deltas.HasPrevious {
+		if s.Deltas.Health != 0 {
+			healthDelta = fmtDelta(s.Deltas.Health, false, "pts")
+		}
+		if s.Deltas.Errors != 0 {
+			errDelta = fmtDelta(s.Deltas.Errors, true, "%")
+		}
+		if s.Deltas.AvgResponse != 0 {
+			avgDelta = fmtDelta(s.Deltas.AvgResponse, true, "%")
+		}
+	}
+
+	cards := []string{
+		makeCard("Health", fmt.Sprintf("%.0f%%", s.HealthScore), healthColor, healthDelta),
+		makeCard("Services", fmt.Sprintf("%d", s.Services), cText, "active"),
+		makeCard("Traces", fmt.Sprintf("%d", s.TotalTraces), cText, "all time"),
+		makeCard("Errors", fmt.Sprintf("%d", s.Errors24h), getErrColor(s.ErrorRate), errDelta),
+		makeCard("Avg Resp", fmtMs(float64(s.AvgResponse)), getLatColor(s.AvgResponse), avgDelta),
+	}
+
+	var b strings.Builder
+	// Row 1: cards[0] + cards[1]
+	b.WriteString(" " + lipgloss.JoinHorizontal(lipgloss.Top, cards[0], " ", cards[1]) + "\n")
+	// Row 2: cards[2] + cards[3]
+	b.WriteString(" " + lipgloss.JoinHorizontal(lipgloss.Top, cards[2], " ", cards[3]) + "\n")
+	// Row 3: cards[4] alone
+	b.WriteString(" " + cards[4] + "\n\n")
+	return b.String()
+}
+
 // -- Chart Row --
 
 func renderChartRow(d *client.DashboardData, w int) string {
@@ -321,6 +401,70 @@ func renderChartRow(d *client.DashboardData, w int) string {
 		Render(errTitle + "\n" + errChart + "\n" + errTimeAxis + "\n" + errStats)
 
 	return " " + lipgloss.JoinHorizontal(lipgloss.Top, reqPanel, " ", errPanel) + "\n\n"
+}
+
+// -- Chart Row (Narrow: stacked vertically) --
+
+func renderChartRowNarrow(d *client.DashboardData, w int) string {
+	chartW := w - 4 // padding inside border
+	chartH := 6
+
+	// Throughput data
+	reqData := make([]float64, len(d.TimeSeries))
+	maxReq := 0
+	for i, ts := range d.TimeSeries {
+		reqData[i] = float64(ts.Requests)
+		if ts.Requests > maxReq {
+			maxReq = ts.Requests
+		}
+	}
+
+	latestTime := ""
+	if len(d.TimeSeries) > 0 {
+		latestTime = d.TimeSeries[len(d.TimeSeries)-1].Time
+	}
+
+	reqChart := ui.RenderSparkline(reqData, chartW, chartH, cCyan)
+	reqTitle := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Requests per Bucket")
+	reqStats := lipgloss.NewStyle().Foreground(cMuted).Render(
+		fmt.Sprintf("Peak: %d  Latest: %s", maxReq, latestTime))
+	reqTimeAxis := renderTimeAxis(d, chartW)
+
+	reqPanel := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cBorder).
+		Padding(0, 1).
+		Render(reqTitle + "\n" + reqChart + "\n" + reqTimeAxis + "\n" + reqStats)
+
+	// Error rate data
+	errData := make([]float64, len(d.TimeSeries))
+	maxErr := 0.0
+	for i, ts := range d.TimeSeries {
+		rate := 0.0
+		if ts.Requests > 0 {
+			rate = float64(ts.Errors) / float64(ts.Requests) * 100
+		}
+		errData[i] = rate
+		if rate > maxErr {
+			maxErr = rate
+		}
+	}
+
+	errChart := ui.RenderSparklineLine(errData, chartW, chartH, cDanger)
+	errTitle := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Error Rate %")
+	errStats := lipgloss.NewStyle().Foreground(cMuted).Render(
+		fmt.Sprintf("Current: %.1f%%  Peak: %.1f%%", d.Stats.ErrorRate, maxErr))
+	errTimeAxis := renderTimeAxis(d, chartW)
+
+	errPanel := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cBorder).
+		Padding(0, 1).
+		Render(errTitle + "\n" + errChart + "\n" + errTimeAxis + "\n" + errStats)
+
+	return " " + reqPanel + "\n\n " + errPanel + "\n\n"
 }
 
 // -- Latency Chart Row --
@@ -470,6 +614,97 @@ func renderInfoRow(d *client.DashboardData, w int) string {
 		Render(alertTitle + "\n" + alertContent.String())
 
 	return " " + lipgloss.JoinHorizontal(lipgloss.Top, svcPanel, " ", alertPanel) + "\n\n"
+}
+
+// -- Info Row (Narrow: stacked vertically) --
+
+func renderInfoRowNarrow(d *client.DashboardData, w int) string {
+	// Services panel
+	var svcContent strings.Builder
+	if len(d.Services) == 0 {
+		svcContent.WriteString(lipgloss.NewStyle().Foreground(cMuted).Render("No services detected"))
+	} else {
+		hdr := lipgloss.NewStyle().Foreground(cMuted).Bold(true)
+		svcContent.WriteString(hdr.Render(fmt.Sprintf("%-20s %6s %6s %6s", "NAME", "REQS", "ERR%", "AVG")))
+		svcContent.WriteString("\n")
+
+		limit := len(d.Services)
+		if limit > 8 {
+			limit = 8
+		}
+		for i := 0; i < limit; i++ {
+			svc := d.Services[i]
+			name := lipgloss.NewStyle().Foreground(cText).Render(fmt.Sprintf("%-20s", trunc(svc.Name, 20)))
+			reqs := lipgloss.NewStyle().Foreground(cText).Render(fmt.Sprintf("%6d", svc.Traces))
+			errR := lipgloss.NewStyle().Foreground(getErrColor(svc.ErrorRate)).Render(fmt.Sprintf("%5.1f%%", svc.ErrorRate))
+			avg := lipgloss.NewStyle().Foreground(getLatColor(svc.AvgResponse)).Render(fmt.Sprintf("%6s", fmtMs(float64(svc.AvgResponse))))
+			svcContent.WriteString(fmt.Sprintf("%s %s %s %s\n", name, reqs, errR, avg))
+		}
+		if len(d.Services) > 8 {
+			svcContent.WriteString(lipgloss.NewStyle().Foreground(cDim).Render(fmt.Sprintf("+%d more", len(d.Services)-8)))
+		}
+	}
+
+	svcTitle := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Services (24h)")
+	svcPanel := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cBorder).
+		Padding(0, 1).
+		Render(svcTitle + "\n" + svcContent.String())
+
+	// Alerts + Anomalies panel
+	var alertContent strings.Builder
+
+	if d.Alerts.Count == 0 {
+		alertContent.WriteString(lipgloss.NewStyle().Foreground(cSuccess).Render("No active alerts") + "\n")
+	} else {
+		alertContent.WriteString(lipgloss.NewStyle().Foreground(cDanger).Bold(true).Render(
+			fmt.Sprintf("%d firing", d.Alerts.Count)) + "\n")
+		limit := d.Alerts.Count
+		if limit > 4 {
+			limit = 4
+		}
+		for i := 0; i < limit; i++ {
+			a := d.Alerts.Items[i]
+			sev := fmtSeverity(a.Severity)
+			alertContent.WriteString(fmt.Sprintf(" %s %s %s\n",
+				sev,
+				lipgloss.NewStyle().Foreground(cText).Render(trunc(a.Name, 28)),
+				lipgloss.NewStyle().Foreground(cDim).Render(a.Duration),
+			))
+		}
+		if d.Alerts.Count > 4 {
+			alertContent.WriteString(lipgloss.NewStyle().Foreground(cDim).Render(fmt.Sprintf(" +%d more\n", d.Alerts.Count-4)))
+		}
+	}
+
+	alertContent.WriteString("\n")
+	if d.Anomalies.Unacknowledged > 0 {
+		anomColor := cWarning
+		if d.Anomalies.Critical > 0 {
+			anomColor = cDanger
+		}
+		anomText := fmt.Sprintf("%d unacknowledged", d.Anomalies.Unacknowledged)
+		if d.Anomalies.Critical > 0 {
+			anomText += fmt.Sprintf(" (%d critical)", d.Anomalies.Critical)
+		}
+		alertContent.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Anomalies") + "\n")
+		alertContent.WriteString(lipgloss.NewStyle().Foreground(anomColor).Render(" "+anomText) + "\n")
+	} else {
+		alertContent.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Anomalies") + "\n")
+		alertContent.WriteString(lipgloss.NewStyle().Foreground(cSuccess).Render(" None") + "\n")
+	}
+
+	alertTitle := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Active Alerts")
+	alertPanel := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cBorder).
+		Padding(0, 1).
+		Render(alertTitle + "\n" + alertContent.String())
+
+	return " " + svcPanel + "\n\n " + alertPanel + "\n\n"
 }
 
 // -- Error Hotspots --
