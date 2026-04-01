@@ -132,73 +132,74 @@ func (m dashModel) View() string {
 			"Terminal too narrow (min 40 cols)\nCurrent: " + fmt.Sprintf("%d", w) + " cols\nPlease widen your terminal.")
 	}
 
-	contentWidth := w - 2
+	// Full terminal width for panels, no extra margins
 	isNarrow := w < 80
 
 	var b strings.Builder
 
 	// -- Header line (inline stats like competitor) --
-	b.WriteString("\n")
-	b.WriteString(renderHeaderLine(m, contentWidth))
-	b.WriteString("\n\n")
+	b.WriteString("\n ")
+	b.WriteString(renderHeaderLine(m, w))
+	b.WriteString("\n\n ")
 
 	if m.err != nil {
-		b.WriteString(lipgloss.NewStyle().Foreground(cDanger).Padding(0, 1).Render(fmt.Sprintf(" Error: %s", m.err.Error())))
+		b.WriteString(lipgloss.NewStyle().Foreground(cDanger).Render(fmt.Sprintf("Error: %s", m.err.Error())))
 		b.WriteString("\n")
 		return b.String()
 	}
 	if m.data == nil {
-		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Render("  Loading..."))
+		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Render("Loading..."))
 		return b.String()
 	}
 
 	d := m.data
 
 	// -- Stats summary line --
-	b.WriteString(renderStatsLine(d, contentWidth))
+	b.WriteString(renderStatsLine(d, w))
 	b.WriteString("\n\n")
 
 	// -- Charts: Throughput + Error Rate side by side (or stacked on narrow) --
 	if len(d.TimeSeries) > 1 {
 		if isNarrow {
-			b.WriteString(renderChartPanel(d, contentWidth, "Requests", "req"))
+			b.WriteString(renderChartPanel(d, w, "Requests", "req"))
 			b.WriteString("\n")
-			b.WriteString(renderChartPanel(d, contentWidth, "Error Rate", "err"))
+			b.WriteString(renderChartPanel(d, w, "Error Rate", "err"))
 		} else {
-			halfW := (contentWidth - 3) / 2
+			halfW := w / 2
 			reqPanel := renderChartPanel(d, halfW, "Requests", "req")
-			errPanel := renderChartPanel(d, halfW, "Error Rate", "err")
-			b.WriteString(" " + lipgloss.JoinHorizontal(lipgloss.Top, reqPanel, " ", errPanel))
+			errPanel := renderChartPanel(d, w-halfW, "Error Rate", "err")
+			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, reqPanel, errPanel))
 		}
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
 
 	// -- Latency chart (P50/P95/P99) full width --
 	if len(d.TimeSeries) > 1 {
-		b.WriteString(renderChartPanel(d, contentWidth, "Response Time", "latency"))
-		b.WriteString("\n\n")
+		b.WriteString(renderChartPanel(d, w, "Response Time", "latency"))
+		b.WriteString("\n")
 	}
 
 	// -- Services + Alerts side by side (or stacked on narrow) --
 	if isNarrow {
-		b.WriteString(renderServicesPanel(d, contentWidth))
+		b.WriteString(renderServicesPanel(d, w))
 		b.WriteString("\n")
-		b.WriteString(renderAlertsPanel(d, contentWidth))
+		b.WriteString(renderAlertsPanel(d, w))
 	} else {
-		halfW := (contentWidth - 3) / 2
+		halfW := w / 2
 		svcPanel := renderServicesPanel(d, halfW)
-		alertPanel := renderAlertsPanel(d, halfW)
-		b.WriteString(" " + lipgloss.JoinHorizontal(lipgloss.Top, svcPanel, " ", alertPanel))
+		alertPanel := renderAlertsPanel(d, w-halfW)
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, svcPanel, alertPanel))
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	// -- Error Hotspots --
 	if len(d.ErrorHotspots) > 0 {
-		b.WriteString(renderHotspots(d, contentWidth))
+		b.WriteString(renderHotspots(d, w))
 		b.WriteString("\n")
 	}
 
 	// -- Footer --
+	b.WriteString(" ")
 	b.WriteString(renderFooter(m))
 	b.WriteString("\n")
 
@@ -386,7 +387,7 @@ func renderChartPanel(d *client.DashboardData, w int, title string, chartType st
 		Padding(0, 1).
 		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render(title) + "\n" + content)
 
-	return " " + panel
+	return panel
 }
 
 // buildYAxis creates Y-axis labels for chart rows
@@ -509,7 +510,7 @@ func renderServicesPanel(d *client.DashboardData, w int) string {
 		Padding(0, 1).
 		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Services") + "\n" + content.String())
 
-	return " " + panel
+	return panel
 }
 
 // -- Alerts Panel --
@@ -565,7 +566,7 @@ func renderAlertsPanel(d *client.DashboardData, w int) string {
 		Padding(0, 1).
 		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Active Alerts") + "\n" + content.String())
 
-	return " " + panel
+	return panel
 }
 
 // -- Error Hotspots --
@@ -588,7 +589,7 @@ func renderHotspots(d *client.DashboardData, w int) string {
 		Padding(0, 1).
 		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Error Hotspots") + "\n" + content.String())
 
-	return " " + panel
+	return panel
 }
 
 // -- Footer: "1 1h  2 6h  3 24h  .  r refresh  q quit" --
