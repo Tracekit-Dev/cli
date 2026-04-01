@@ -337,8 +337,12 @@ func (m servicesModel) renderMetricsTab(w int) string {
 			lipgloss.NewStyle().Foreground(cText).Render(formatCount(d.RequestCount)),
 		lipgloss.NewStyle().Foreground(cDim).Render("Error Rate: ") +
 			lipgloss.NewStyle().Foreground(healthColor(d.ErrorRate)).Bold(true).Render(formatErrorRate(d.ErrorRate)),
+		lipgloss.NewStyle().Foreground(cDim).Render("P50 Latency: ") +
+			lipgloss.NewStyle().Foreground(cText).Render(formatLatency(d.P50Latency)),
 		lipgloss.NewStyle().Foreground(cDim).Render("P95 Latency: ") +
 			lipgloss.NewStyle().Foreground(cText).Render(formatLatency(d.P95Latency)),
+		lipgloss.NewStyle().Foreground(cDim).Render("P99 Latency: ") +
+			lipgloss.NewStyle().Foreground(cText).Render(formatLatency(d.P99Latency)),
 		lipgloss.NewStyle().Foreground(cDim).Render("Avg Latency: ") +
 			lipgloss.NewStyle().Foreground(cText).Render(formatLatency(d.AvgLatency)),
 	}

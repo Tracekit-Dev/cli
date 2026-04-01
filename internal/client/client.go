@@ -766,7 +766,9 @@ type CLIServiceDetail struct {
 	Name         string           `json:"name"`
 	RequestCount int64            `json:"request_count"`
 	ErrorRate    float64          `json:"error_rate"`
+	P50Latency   float64          `json:"p50_latency"`
 	P95Latency   float64          `json:"p95_latency"`
+	P99Latency   float64          `json:"p99_latency"`
 	AvgLatency   float64          `json:"avg_latency"`
 	TopErrors    []CLIErrorSummary `json:"top_errors"`
 	Operations   []CLIServiceOp   `json:"operations"`
