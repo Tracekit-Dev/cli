@@ -44,11 +44,12 @@ var (
 	cWarning = lipgloss.Color("#d97706")
 	cDanger  = lipgloss.Color("#dc2626")
 	cMuted   = lipgloss.Color("#6b7280")
-	cText    = lipgloss.AdaptiveColor{Light: "#1f2937", Dark: "#e5e7eb"}
-	cDim     = lipgloss.AdaptiveColor{Light: "#9ca3af", Dark: "#374151"}
-	cBorder  = lipgloss.AdaptiveColor{Light: "#d1d5db", Dark: "#374151"}
+	cText    = lipgloss.AdaptiveColor{Light: "#111827", Dark: "#ffffff"}
+	cDim     = lipgloss.AdaptiveColor{Light: "#6b7280", Dark: "#6b7280"}
+	cBorder  = lipgloss.AdaptiveColor{Light: "#d1d5db", Dark: "#4b5563"}
 	cCyan    = lipgloss.Color("#0891b2")
 	cPurple  = lipgloss.Color("#7c3aed")
+	cAmber   = lipgloss.Color("#d97706")
 )
 
 // -- Bubbletea Model --
@@ -61,6 +62,7 @@ type dashModel struct {
 	height    int
 	lastFetch time.Time
 	quitting  bool
+	window    string // "1h", "6h", "24h"
 }
 
 type tickMsg time.Time
@@ -69,15 +71,15 @@ type dataMsg struct {
 	err  error
 }
 
-func fetchDashData(c *client.Client) tea.Cmd {
+func fetchDashData(c *client.Client, window string) tea.Cmd {
 	return func() tea.Msg {
-		data, err := c.GetDashboard()
+		data, err := c.GetDashboard(window)
 		return dataMsg{data: data, err: err}
 	}
 }
 
 func (m dashModel) Init() tea.Cmd {
-	return tea.Batch(fetchDashData(m.client), tea.Tick(30*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }))
+	return tea.Batch(fetchDashData(m.client, m.window), tea.Tick(30*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }))
 }
 
 func (m dashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -88,13 +90,22 @@ func (m dashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "r":
-			return m, fetchDashData(m.client)
+			return m, fetchDashData(m.client, m.window)
+		case "1":
+			m.window = "1h"
+			return m, fetchDashData(m.client, m.window)
+		case "2":
+			m.window = "6h"
+			return m, fetchDashData(m.client, m.window)
+		case "3":
+			m.window = "24h"
+			return m, fetchDashData(m.client, m.window)
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 	case tickMsg:
-		return m, tea.Batch(fetchDashData(m.client), tea.Tick(30*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }))
+		return m, tea.Batch(fetchDashData(m.client, m.window), tea.Tick(30*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }))
 	case dataMsg:
 		m.lastFetch = time.Now()
 		if msg.err != nil {
@@ -132,7 +143,6 @@ func (m dashModel) View() string {
 		ago := time.Since(m.lastFetch).Round(time.Second)
 		b.WriteString(statusStyle.Render(fmt.Sprintf("  last %s  ", ago)))
 	}
-	b.WriteString(statusStyle.Render(" r refresh  q quit"))
 	b.WriteString("\n\n")
 
 	if m.err != nil {
@@ -156,16 +166,34 @@ func (m dashModel) View() string {
 		b.WriteString(renderChartRow(d, contentWidth))
 	}
 
-	// -- Row 3: Services + Alerts side by side --
+	// -- Row 3: Latency Chart (P50/P95/P99) --
+	if len(d.TimeSeries) > 1 {
+		b.WriteString(renderLatencyRow(d, contentWidth))
+	}
+
+	// -- Row 4: Services + Alerts side by side --
 	b.WriteString(renderInfoRow(d, contentWidth))
 
-	// -- Row 4: Error Hotspots --
+	// -- Row 5: Error Hotspots --
 	if len(d.ErrorHotspots) > 0 {
 		b.WriteString(renderHotspots(d, contentWidth))
 	}
 
-	// Footer
-	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Render("  app.tracekit.dev"))
+	// Footer with time window selector
+	footerParts := []string{}
+	windows := []struct{ key, label string }{{"1", "1h"}, {"2", "6h"}, {"3", "24h"}}
+	for _, win := range windows {
+		if m.window == win.label {
+			footerParts = append(footerParts, lipgloss.NewStyle().Foreground(cBrand).Bold(true).Render("["+win.key+"] "+win.label))
+		} else {
+			footerParts = append(footerParts, lipgloss.NewStyle().Foreground(cDim).Render(win.key+" "+win.label))
+		}
+	}
+	windowBar := strings.Join(footerParts, "  ")
+	b.WriteString("  " + windowBar + "    ")
+	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Render("r refresh  q quit"))
+	b.WriteString("    ")
+	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Render("app.tracekit.dev"))
 	b.WriteString("\n")
 
 	return b.String()
@@ -253,16 +281,17 @@ func renderChartRow(d *client.DashboardData, w int) string {
 	}
 
 	reqChart := ui.RenderSparkline(reqData, chartW, chartH, cCyan)
-	reqTitle := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Requests per Hour")
+	reqTitle := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Requests per Bucket")
 	reqStats := lipgloss.NewStyle().Foreground(cMuted).Render(
 		fmt.Sprintf("Peak: %d  Latest: %s", maxReq, latestTime))
+	reqTimeAxis := renderTimeAxis(d, chartW)
 
 	reqPanel := lipgloss.NewStyle().
 		Width(halfW).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cBorder).
 		Padding(0, 1).
-		Render(reqTitle + "\n" + reqChart + "\n" + reqStats)
+		Render(reqTitle + "\n" + reqChart + "\n" + reqTimeAxis + "\n" + reqStats)
 
 	// Error rate data
 	errData := make([]float64, len(d.TimeSeries))
@@ -282,15 +311,70 @@ func renderChartRow(d *client.DashboardData, w int) string {
 	errTitle := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Error Rate %")
 	errStats := lipgloss.NewStyle().Foreground(cMuted).Render(
 		fmt.Sprintf("Current: %.1f%%  Peak: %.1f%%", d.Stats.ErrorRate, maxErr))
+	errTimeAxis := renderTimeAxis(d, chartW)
 
 	errPanel := lipgloss.NewStyle().
 		Width(halfW).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cBorder).
 		Padding(0, 1).
-		Render(errTitle + "\n" + errChart + "\n" + errStats)
+		Render(errTitle + "\n" + errChart + "\n" + errTimeAxis + "\n" + errStats)
 
 	return " " + lipgloss.JoinHorizontal(lipgloss.Top, reqPanel, " ", errPanel) + "\n\n"
+}
+
+// -- Latency Chart Row --
+
+func renderLatencyRow(d *client.DashboardData, w int) string {
+	chartW := w - 4 // full width minus panel padding
+	chartH := 6
+
+	p50Data := make([]float64, len(d.TimeSeries))
+	p95Data := make([]float64, len(d.TimeSeries))
+	p99Data := make([]float64, len(d.TimeSeries))
+	for i, ts := range d.TimeSeries {
+		p50Data[i] = float64(ts.P50)
+		p95Data[i] = float64(ts.P95)
+		p99Data[i] = float64(ts.P99)
+	}
+
+	chart := ui.RenderMultiSparkline([]ui.SparklineSeries{
+		{Data: p99Data, Color: cAmber},
+		{Data: p95Data, Color: cPurple},
+		{Data: p50Data, Color: cCyan},
+	}, chartW, chartH)
+
+	title := lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Latency (ms)")
+	legend := lipgloss.NewStyle().Foreground(cMuted).Render(
+		lipgloss.NewStyle().Foreground(cCyan).Render("P50") + "  " +
+			lipgloss.NewStyle().Foreground(cPurple).Render("P95") + "  " +
+			lipgloss.NewStyle().Foreground(cAmber).Render("P99"))
+
+	timeAxis := renderTimeAxis(d, chartW)
+
+	panel := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cBorder).
+		Padding(0, 1).
+		Render(title + "  " + legend + "\n" + chart + "\n" + timeAxis)
+
+	return " " + panel + "\n\n"
+}
+
+// renderTimeAxis returns a time axis label showing first and last bucket times.
+func renderTimeAxis(d *client.DashboardData, chartW int) string {
+	if len(d.TimeSeries) <= 1 {
+		return ""
+	}
+	first := d.TimeSeries[0].Time
+	last := d.TimeSeries[len(d.TimeSeries)-1].Time
+	gap := chartW - len(first) - len(last)
+	if gap < 1 {
+		gap = 1
+	}
+	return lipgloss.NewStyle().Foreground(cMuted).Render(
+		first + strings.Repeat(" ", gap) + last)
 }
 
 // -- Info Row: Services + Alerts --
@@ -424,7 +508,7 @@ func fmtDelta(val float64, invert bool, unit string) string {
 		color = cDanger
 	}
 	return lipgloss.NewStyle().Foreground(color).Render(
-		fmt.Sprintf("%s%.0f%s vs yday", arrow, math.Abs(val), unit))
+		fmt.Sprintf("%s%.0f%s vs prev", arrow, math.Abs(val), unit))
 }
 
 func fmtSeverity(s string) string {
@@ -498,7 +582,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	c := client.NewClient(baseURL)
 	c.APIKey = apiKey
 
-	p := tea.NewProgram(dashModel{client: c}, tea.WithAltScreen())
+	p := tea.NewProgram(dashModel{client: c, window: "1h"}, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("dashboard error: %w", err)
 	}
