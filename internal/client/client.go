@@ -1,13 +1,16 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -837,6 +840,107 @@ func (c *Client) GetTrace(traceID string) (*TraceDetailResponse, error) {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 	return &data, nil
+}
+
+// StreamTraces opens an SSE connection to /v1/traces/stream and delivers trace events via channel.
+// Returns a traces channel (buffered 32), an error channel (buffered 1), and an initial connection error.
+// The caller should cancel the context to close the stream.
+func (c *Client) StreamTraces(ctx context.Context, service string, errorsOnly bool) (<-chan CLITrace, <-chan error, error) {
+	if c.APIKey == "" {
+		return nil, nil, fmt.Errorf("API key required")
+	}
+
+	// Build URL with query params
+	u := c.BaseURL + "/v1/traces/stream"
+	var params []string
+	if service != "" {
+		params = append(params, "service="+service)
+	}
+	if errorsOnly {
+		params = append(params, "errors=true")
+	}
+	if len(params) > 0 {
+		u += "?" + strings.Join(params, "&")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("X-API-Key", c.APIKey)
+
+	// Use a dedicated client with no timeout for streaming
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stream connection failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, nil, fmt.Errorf("stream error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	tracesCh := make(chan CLITrace, 32)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer resp.Body.Close()
+		defer close(tracesCh)
+		defer close(errCh)
+
+		scanner := bufio.NewScanner(resp.Body)
+		var eventType string
+		var dataLine string
+
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			line := scanner.Text()
+
+			if line == "" {
+				// Empty line = end of SSE event
+				if eventType == "heartbeat" || dataLine == "" {
+					eventType = ""
+					dataLine = ""
+					continue
+				}
+				if eventType == "trace" || eventType == "" {
+					var trace CLITrace
+					if err := json.Unmarshal([]byte(dataLine), &trace); err == nil {
+						select {
+						case tracesCh <- trace:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
+				eventType = ""
+				dataLine = ""
+				continue
+			}
+
+			if strings.HasPrefix(line, "event:") {
+				eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			} else if strings.HasPrefix(line, "data:") {
+				dataLine = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			select {
+			case errCh <- fmt.Errorf("stream read error: %w", err):
+			default:
+			}
+		}
+	}()
+
+	return tracesCh, errCh, nil
 }
 
 // GetServices fetches the list of services for filter autocomplete
