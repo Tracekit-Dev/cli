@@ -1638,3 +1638,34 @@ func (c *Client) SnoozeIncident(itemID, entityType, duration string) error {
 	}
 	return nil
 }
+
+// AskCopilot sends a question to the copilot API and returns the raw SSE response.
+// The caller is responsible for reading the response body and closing it.
+func (c *Client) AskCopilot(ctx context.Context, question string) (*http.Response, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	body, _ := json.Marshal(map[string]string{"question": question})
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/copilot/ask", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("X-API-Key", c.APIKey)
+
+	// Use a dedicated client with no timeout for streaming
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("copilot connection failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("copilot error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return resp, nil
+}
