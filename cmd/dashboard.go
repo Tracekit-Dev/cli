@@ -239,26 +239,38 @@ func renderStatsLine(d *client.DashboardData, w int) string {
 		healthColor = cDanger
 	}
 
+	// Health with delta
+	healthPart := lipgloss.NewStyle().Foreground(cMuted).Render("Health: ") +
+		lipgloss.NewStyle().Foreground(healthColor).Bold(true).Render(fmt.Sprintf("%.0f%%", s.HealthScore))
+	if s.Deltas.HasPrevious && s.Deltas.Health != 0 {
+		healthPart += " " + fmtDelta(s.Deltas.Health, false, "pts")
+	}
+
+	// Errors with delta
+	errorPart := lipgloss.NewStyle().Foreground(getErrColor(s.ErrorRate)).Render(fmt.Sprintf("%d", s.Errors24h)) +
+		lipgloss.NewStyle().Foreground(cMuted).Render(fmt.Sprintf(" errors (%.1f%%)", s.ErrorRate))
+	if s.Deltas.HasPrevious && s.Deltas.Errors != 0 {
+		errorPart += " " + fmtDelta(s.Deltas.Errors, true, "%")
+	}
+
+	// Avg response with delta
+	avgPart := lipgloss.NewStyle().Foreground(getLatColor(s.AvgResponse)).Render(fmtMs(float64(s.AvgResponse))) +
+		lipgloss.NewStyle().Foreground(cMuted).Render(" avg")
+	if s.Deltas.HasPrevious && s.Deltas.AvgResponse != 0 {
+		avgPart += " " + fmtDelta(s.Deltas.AvgResponse, true, "%")
+	}
+
 	parts := []string{
-		lipgloss.NewStyle().Foreground(cMuted).Render("Health: ") +
-			lipgloss.NewStyle().Foreground(healthColor).Bold(true).Render(fmt.Sprintf("%.0f%%", s.HealthScore)),
+		healthPart,
 		lipgloss.NewStyle().Foreground(cText).Render(fmt.Sprintf("%d", s.Services)) +
 			lipgloss.NewStyle().Foreground(cMuted).Render(" services"),
 		lipgloss.NewStyle().Foreground(cText).Render(fmtNumber(s.Traces24h)) +
 			lipgloss.NewStyle().Foreground(cMuted).Render(" traces"),
-		lipgloss.NewStyle().Foreground(getErrColor(s.ErrorRate)).Render(fmt.Sprintf("%d", s.Errors24h)) +
-			lipgloss.NewStyle().Foreground(cMuted).Render(fmt.Sprintf(" errors (%.1f%%)", s.ErrorRate)),
-		lipgloss.NewStyle().Foreground(getLatColor(s.AvgResponse)).Render(fmtMs(float64(s.AvgResponse))) +
-			lipgloss.NewStyle().Foreground(cMuted).Render(" avg"),
+		errorPart,
+		avgPart,
 	}
 
-	// Add deltas if available
-	deltaStr := ""
-	if s.Deltas.HasPrevious && s.Deltas.Health != 0 {
-		deltaStr = "  " + fmtDelta(s.Deltas.Health, false, "pts")
-	}
-
-	return " " + strings.Join(parts, sep) + deltaStr
+	return " " + strings.Join(parts, sep)
 }
 
 // -- Chart Panel with Y-axis labels, X-axis time labels, title in border --
