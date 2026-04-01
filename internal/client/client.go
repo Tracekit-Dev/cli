@@ -690,3 +690,185 @@ func (c *Client) DeleteSourceMaps(release string) (*SourceMapDeleteResponse, err
 
 	return &deleteResp, nil
 }
+
+// CLITrace is the trace struct for CLI display (matches server JSON)
+type CLITrace struct {
+	ID            string `json:"id"`
+	TraceID       string `json:"trace_id"`
+	ServiceName   string `json:"service_name"`
+	OperationName string `json:"operation_name"`
+	StartTime     string `json:"start_time"`
+	DurationMs    int    `json:"duration_ms"`
+	StatusCode    string `json:"status_code"`
+	HasError      bool   `json:"has_error"`
+	SpanCount     int    `json:"span_count"`
+}
+
+// CLISpan is the span struct for CLI display
+type CLISpan struct {
+	ID            string  `json:"id"`
+	SpanID        string  `json:"span_id"`
+	ParentSpanID  *string `json:"parent_span_id"`
+	ServiceName   string  `json:"service_name"`
+	OperationName string  `json:"operation_name"`
+	Kind          string  `json:"kind"`
+	StartTime     string  `json:"start_time"`
+	DurationMs    int     `json:"duration_ms"`
+	StatusCode    string  `json:"status_code"`
+}
+
+// TraceListResponse is the response from /v1/traces
+type TraceListResponse struct {
+	Traces     []CLITrace `json:"traces"`
+	TotalCount int        `json:"total_count"`
+	Limit      int        `json:"limit"`
+	Offset     int        `json:"offset"`
+}
+
+// TraceDetailResponse is the response from /v1/traces/:id
+type TraceDetailResponse struct {
+	Trace CLITrace  `json:"trace"`
+	Spans []CLISpan `json:"spans"`
+}
+
+// ServiceListResponse is the response from /v1/services
+type ServiceListResponse struct {
+	Services []CLIService `json:"services"`
+}
+
+// CLIService represents a service for CLI display
+type CLIService struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// GetTraces fetches trace list with optional filters
+func (c *Client) GetTraces(service string, hasError bool, minDurationMs int, timeWindow string, limit, offset int) (*TraceListResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	url := fmt.Sprintf("%s/v1/traces?limit=%d&offset=%d&sort_by=start_time&sort_order=desc", c.BaseURL, limit, offset)
+	if service != "" {
+		url += "&service=" + service
+	}
+	if hasError {
+		url += "&has_error=true"
+	}
+	if minDurationMs > 0 {
+		url += fmt.Sprintf("&min_duration=%d", minDurationMs)
+	}
+
+	// Map timeWindow to start_time_from/start_time_to
+	if timeWindow != "" && timeWindow != "all" {
+		now := time.Now().UTC()
+		var from time.Time
+		switch timeWindow {
+		case "1h":
+			from = now.Add(-1 * time.Hour)
+		case "6h":
+			from = now.Add(-6 * time.Hour)
+		case "24h":
+			from = now.Add(-24 * time.Hour)
+		}
+		if !from.IsZero() {
+			url += "&start_time_from=" + from.Format(time.RFC3339)
+			url += "&start_time_to=" + now.Format(time.RFC3339)
+		}
+	}
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var data TraceListResponse
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &data, nil
+}
+
+// GetTrace fetches a single trace with spans
+func (c *Client) GetTrace(traceID string) (*TraceDetailResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/traces/"+traceID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var data TraceDetailResponse
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &data, nil
+}
+
+// GetServices fetches the list of services for filter autocomplete
+func (c *Client) GetServices() (*ServiceListResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/services", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var data ServiceListResponse
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &data, nil
+}
