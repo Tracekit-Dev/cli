@@ -139,6 +139,128 @@ func RenderSparklineLine(data []float64, width, height int, color lipgloss.Color
 	return strings.Join(lines, "\n")
 }
 
+// SparklineSeries represents one data series for multi-line overlay.
+type SparklineSeries struct {
+	Data  []float64
+	Color lipgloss.Color
+}
+
+// RenderMultiSparkline renders multiple sparkline lines overlaid on the same chart.
+// Each series gets its own color. All series share the same Y-axis scale.
+func RenderMultiSparkline(series []SparklineSeries, width, height int) string {
+	if width == 0 || height == 0 {
+		return ""
+	}
+
+	// Check if all series are empty
+	allEmpty := true
+	for _, s := range series {
+		if len(s.Data) > 0 {
+			allEmpty = false
+			break
+		}
+	}
+	if allEmpty {
+		return ""
+	}
+
+	dotH := height * 4
+	dotW := width * 2
+
+	// Find global min/max across all series for shared Y-axis
+	first := true
+	var globalMin, globalMax float64
+	for _, s := range series {
+		for _, v := range s.Data {
+			if first {
+				globalMin, globalMax = v, v
+				first = true
+			}
+			if first || v < globalMin {
+				globalMin = v
+			}
+			if first || v > globalMax {
+				globalMax = v
+			}
+			first = false
+		}
+	}
+	valRange := globalMax - globalMin
+	if valRange == 0 {
+		valRange = 1
+	}
+
+	// Create one bool grid per series
+	grids := make([][][]bool, len(series))
+	for si, s := range series {
+		grids[si] = make([][]bool, dotH)
+		for r := range grids[si] {
+			grids[si][r] = make([]bool, dotW)
+		}
+
+		if len(s.Data) == 0 {
+			continue
+		}
+
+		resampled := resample(s.Data, dotW)
+
+		// Plot line connecting points (same logic as RenderSparklineLine)
+		for x := 0; x < dotW && x < len(resampled); x++ {
+			normalized := (resampled[x] - globalMin) / valRange
+			dotRow := dotH - 1 - int(math.Round(normalized*float64(dotH-1)))
+			if dotRow >= 0 && dotRow < dotH {
+				grids[si][dotRow][x] = true
+			}
+			if x+1 < len(resampled) {
+				nextNorm := (resampled[x+1] - globalMin) / valRange
+				nextRow := dotH - 1 - int(math.Round(nextNorm*float64(dotH-1)))
+				start, end := dotRow, nextRow
+				if start > end {
+					start, end = end, start
+				}
+				for r := start; r <= end; r++ {
+					if r >= 0 && r < dotH {
+						grids[si][r][x] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Render to braille: for each cell, use color of first series that has dots
+	var lines []string
+	for row := 0; row < dotH; row += 4 {
+		var line strings.Builder
+		for col := 0; col < dotW; col += 2 {
+			// Find which series have dots in this cell
+			bestSeries := -1
+			for si := range series {
+				ch := brailleChar(grids[si], row, col, dotH, dotW)
+				if ch != '\u2800' {
+					if bestSeries == -1 {
+						bestSeries = si
+					}
+				}
+			}
+			if bestSeries == -1 {
+				line.WriteRune('\u2800')
+			} else {
+				// Merge all series dots into one character, color by highest priority
+				var mergedCode rune
+				for si := range series {
+					ch := brailleChar(grids[si], row, col, dotH, dotW)
+					mergedCode |= (ch - '\u2800')
+				}
+				styled := lipgloss.NewStyle().Foreground(series[bestSeries].Color).Render(string('\u2800' + mergedCode))
+				line.WriteString(styled)
+			}
+		}
+		lines = append(lines, line.String())
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 // brailleChar encodes a 2x4 cell from the grid into a braille character.
 // Braille dot positions:
 //

@@ -481,17 +481,24 @@ type DashboardData struct {
 		Requests    int    `json:"requests"`
 		Errors      int    `json:"errors"`
 		AvgDuration int    `json:"avg_duration"`
+		P50         int    `json:"p50"`
+		P95         int    `json:"p95"`
+		P99         int    `json:"p99"`
 	} `json:"time_series"`
 	Timestamp string `json:"timestamp"`
 }
 
 // GetDashboard fetches the full dashboard data
-func (c *Client) GetDashboard() (*DashboardData, error) {
+func (c *Client) GetDashboard(window string) (*DashboardData, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("API key required")
 	}
 
-	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/alerts/dashboard", nil)
+	url := c.BaseURL + "/v1/alerts/dashboard"
+	if window != "" {
+		url += "?window=" + window
+	}
+	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
