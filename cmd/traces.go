@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ var tracesCmd = &cobra.Command{
 
 Key bindings:
   j/k or arrows   Navigate trace list
-  enter            Open trace detail (coming soon)
+  enter            Open trace detail
   /                Filter by service
   e                Toggle errors-only filter
   d                Set minimum duration filter
@@ -51,6 +52,10 @@ type servicesLoadedMsg struct {
 
 type tracesErrMsg struct{ err error }
 
+type traceDetailLoadedMsg struct {
+	detail *client.TraceDetailResponse
+}
+
 // -- Commands --
 
 func fetchTraces(c *client.Client, service string, hasError bool, minDur int, timeWindow string, limit, offset int) tea.Cmd {
@@ -71,6 +76,25 @@ func fetchServices(c *client.Client) tea.Cmd {
 		}
 		return servicesLoadedMsg{services: resp.Services}
 	}
+}
+
+func fetchTraceDetail(c *client.Client, traceID string) tea.Cmd {
+	return func() tea.Msg {
+		detail, err := c.GetTrace(traceID)
+		if err != nil {
+			return tracesErrMsg{err: err}
+		}
+		return traceDetailLoadedMsg{detail: detail}
+	}
+}
+
+// -- Span tree types --
+
+type spanNode struct {
+	span     client.CLISpan
+	children []*spanNode
+	depth    int
+	isLast   bool
 }
 
 // -- Model --
@@ -100,7 +124,12 @@ type tracesModel struct {
 	serviceCursor    int
 
 	// View state
-	selectedTraceID string // for future detail view (Plan 02)
+	selectedTraceID string
+
+	// Detail view state
+	detailTrace   *client.TraceDetailResponse
+	detailLoading bool
+	detailScroll  int
 }
 
 func (m tracesModel) Init() tea.Cmd {
@@ -137,8 +166,15 @@ func (m tracesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case traceDetailLoadedMsg:
+		m.detailLoading = false
+		m.detailTrace = msg.detail
+		m.detailScroll = 0
+		return m, nil
+
 	case tracesErrMsg:
 		m.loading = false
+		m.detailLoading = false
 		m.err = msg.err
 		return m, nil
 
@@ -151,6 +187,11 @@ func (m tracesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m tracesModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// Detail view mode
+	if m.selectedTraceID != "" && m.detailTrace != nil {
+		return m.handleDetailKey(key)
+	}
 
 	// Service filter mode
 	if m.filterMode == "service" {
@@ -241,7 +282,10 @@ func (m tracesModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if len(m.traces) > 0 && m.cursor < len(m.traces) {
 			m.selectedTraceID = m.traces[m.cursor].TraceID
-			// Detail view placeholder for Plan 02
+			m.detailLoading = true
+			m.detailTrace = nil
+			m.detailScroll = 0
+			return m, fetchTraceDetail(m.client, m.selectedTraceID)
 		}
 
 	case "e":
@@ -291,6 +335,26 @@ func (m tracesModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m tracesModel) handleDetailKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "q":
+		m.selectedTraceID = ""
+		m.detailTrace = nil
+		m.detailScroll = 0
+		m.err = nil
+	case "j", "down":
+		m.detailScroll++
+	case "k", "up":
+		if m.detailScroll > 0 {
+			m.detailScroll--
+		}
+	case "ctrl+c":
+		m.quitting = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
 func (m tracesModel) refetch() tea.Cmd {
 	return fetchTraces(m.client, m.filterService, m.filterErrors, m.filterMinDurMs, m.filterTimeWindow, m.limit, m.offset)
 }
@@ -305,6 +369,21 @@ func (m tracesModel) View() string {
 	w := m.width
 	if w == 0 {
 		w = 100
+	}
+
+	// Detail loading state
+	if m.detailLoading {
+		var b strings.Builder
+		b.WriteString("\n\n")
+		msg := fmt.Sprintf("Loading trace %s...", truncID(m.selectedTraceID))
+		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render(msg))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	// Detail view
+	if m.selectedTraceID != "" && m.detailTrace != nil {
+		return m.renderDetailView()
 	}
 
 	var b strings.Builder
@@ -384,6 +463,352 @@ func (m tracesModel) View() string {
 
 	return b.String()
 }
+
+// -- Detail View --
+
+func (m tracesModel) renderDetailView() string {
+	w := m.width
+	if w == 0 {
+		w = 100
+	}
+	h := m.height
+	if h == 0 {
+		h = 40
+	}
+
+	detail := m.detailTrace
+	spans := detail.Spans
+	trace := detail.Trace
+
+	var b strings.Builder
+
+	// Header panel: trace summary
+	headerContent := m.renderTraceSummary(trace, spans)
+	headerPanel := titledPanel("Trace Detail", headerContent, w-2)
+	b.WriteString("\n")
+	b.WriteString(headerPanel)
+	b.WriteString("\n")
+
+	// Build span tree and flatten
+	flatNodes := buildSpanTree(spans)
+
+	// Render waterfall rows
+	waterfallRows := m.renderWaterfallRows(flatNodes, trace, w)
+
+	// Apply scrolling
+	footerHeight := 2
+	headerLines := strings.Count(headerPanel, "\n") + 2 // +2 for surrounding newlines
+	availableRows := h - headerLines - footerHeight
+	if availableRows < 3 {
+		availableRows = 3
+	}
+
+	// Clamp scroll
+	maxScroll := len(waterfallRows) - availableRows
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	scroll := m.detailScroll
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	// Slice visible rows
+	endIdx := scroll + availableRows
+	if endIdx > len(waterfallRows) {
+		endIdx = len(waterfallRows)
+	}
+	visibleRows := waterfallRows
+	if scroll < len(waterfallRows) {
+		visibleRows = waterfallRows[scroll:endIdx]
+	} else {
+		visibleRows = nil
+	}
+
+	for _, row := range visibleRows {
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+
+	// Scroll indicator
+	if len(waterfallRows) > availableRows {
+		scrollInfo := fmt.Sprintf(" [%d/%d]", scroll+1, len(waterfallRows))
+		b.WriteString(lipgloss.NewStyle().Foreground(cDim).Render(scrollInfo))
+		b.WriteString("\n")
+	}
+
+	// Footer
+	footer := fmt.Sprintf(" esc back | j/k scroll | trace %s", truncID(m.selectedTraceID))
+	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Render(footer))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+func (m tracesModel) renderTraceSummary(trace client.CLITrace, spans []client.CLISpan) string {
+	var lines []string
+
+	// Trace ID
+	idLabel := lipgloss.NewStyle().Foreground(cDim).Render("Trace ID: ")
+	idVal := lipgloss.NewStyle().Foreground(cText).Bold(true).Render(truncID(trace.TraceID))
+	lines = append(lines, idLabel+idVal)
+
+	// Service
+	svcLabel := lipgloss.NewStyle().Foreground(cDim).Render("Service:  ")
+	svcVal := lipgloss.NewStyle().Foreground(cCyan).Render(trace.ServiceName)
+	lines = append(lines, svcLabel+svcVal)
+
+	// Duration
+	durLabel := lipgloss.NewStyle().Foreground(cDim).Render("Duration: ")
+	durVal := lipgloss.NewStyle().Foreground(cText).Bold(true).Render(fmtTraceDuration(trace.DurationMs))
+	lines = append(lines, durLabel+durVal)
+
+	// Span count
+	spanLabel := lipgloss.NewStyle().Foreground(cDim).Render("Spans:    ")
+	spanVal := lipgloss.NewStyle().Foreground(cText).Render(fmt.Sprintf("%d", len(spans)))
+	lines = append(lines, spanLabel+spanVal)
+
+	// Status
+	statusLabel := lipgloss.NewStyle().Foreground(cDim).Render("Status:   ")
+	var statusVal string
+	if trace.HasError {
+		statusVal = lipgloss.NewStyle().Foreground(cDanger).Bold(true).Render("ERROR")
+	} else {
+		statusVal = lipgloss.NewStyle().Foreground(cSuccess).Bold(true).Render("OK")
+	}
+	lines = append(lines, statusLabel+statusVal)
+
+	return strings.Join(lines, "\n")
+}
+
+// buildSpanTree creates a tree from flat spans and returns a DFS-flattened list with depth info.
+func buildSpanTree(spans []client.CLISpan) []*spanNode {
+	if len(spans) == 0 {
+		return nil
+	}
+
+	// Create nodes map by SpanID
+	nodeMap := make(map[string]*spanNode, len(spans))
+	for _, s := range spans {
+		nodeMap[s.SpanID] = &spanNode{span: s}
+	}
+
+	// Build parent-child relationships
+	var roots []*spanNode
+	for _, s := range spans {
+		node := nodeMap[s.SpanID]
+		if s.ParentSpanID != nil && *s.ParentSpanID != "" {
+			if parent, ok := nodeMap[*s.ParentSpanID]; ok {
+				parent.children = append(parent.children, node)
+				continue
+			}
+		}
+		roots = append(roots, node)
+	}
+
+	// Sort children by start time
+	sortChildren(roots)
+
+	// Sort roots by start time
+	sort.Slice(roots, func(i, j int) bool {
+		return roots[i].span.StartTime < roots[j].span.StartTime
+	})
+
+	// Flatten via DFS
+	var flat []*spanNode
+	for i, root := range roots {
+		root.isLast = i == len(roots)-1
+		flattenTree(root, 0, &flat)
+	}
+
+	return flat
+}
+
+func sortChildren(nodes []*spanNode) {
+	for _, node := range nodes {
+		if len(node.children) > 0 {
+			sort.Slice(node.children, func(i, j int) bool {
+				return node.children[i].span.StartTime < node.children[j].span.StartTime
+			})
+			// Mark last child
+			for i, child := range node.children {
+				child.isLast = i == len(node.children)-1
+			}
+			sortChildren(node.children)
+		}
+	}
+}
+
+func flattenTree(node *spanNode, depth int, result *[]*spanNode) {
+	node.depth = depth
+	*result = append(*result, node)
+	for _, child := range node.children {
+		flattenTree(child, depth+1, result)
+	}
+}
+
+func (m tracesModel) renderWaterfallRows(nodes []*spanNode, trace client.CLITrace, termWidth int) []string {
+	if len(nodes) == 0 {
+		return []string{lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("No spans found")}
+	}
+
+	// Parse trace start time for offset calculation
+	traceStart := parseSpanTime(trace.StartTime)
+	traceDurMs := trace.DurationMs
+	if traceDurMs <= 0 {
+		traceDurMs = 1 // avoid division by zero
+	}
+
+	// Calculate column widths
+	// Layout: " INDENT STATUS OP (SVC) DURATION | BAR "
+	maxIndent := 0
+	for _, n := range nodes {
+		indent := n.depth*2 + 3 // tree chars
+		if indent > maxIndent {
+			maxIndent = indent
+		}
+	}
+
+	barWidth := 30
+	textCols := maxIndent + 3 + 30 + 10 // indent + status + op/svc + duration
+	if termWidth > textCols+20 {
+		barWidth = termWidth - textCols - 4
+	}
+	if barWidth < 10 {
+		barWidth = 10
+	}
+	if barWidth > 60 {
+		barWidth = 60
+	}
+
+	var rows []string
+	for _, node := range nodes {
+		span := node.span
+
+		// Tree indent with connectors
+		indent := buildTreeIndent(node)
+
+		// Status icon
+		var statusIcon string
+		if span.StatusCode == "ERROR" || span.StatusCode == "error" {
+			statusIcon = lipgloss.NewStyle().Foreground(cDanger).Render("\u25cf")
+		} else {
+			statusIcon = lipgloss.NewStyle().Foreground(cSuccess).Render("\u25cf")
+		}
+
+		// Operation name (bold) and service (dim)
+		opStyle := lipgloss.NewStyle().Foreground(cText).Bold(true)
+		svcStyle := lipgloss.NewStyle().Foreground(cDim)
+		kindStyle := lipgloss.NewStyle().Foreground(cDim)
+
+		opName := trunc(span.OperationName, 25)
+		svcName := svcStyle.Render("(" + trunc(span.ServiceName, 15) + ")")
+
+		kindTag := ""
+		if span.Kind != "" && span.Kind != "SPAN_KIND_UNSPECIFIED" {
+			shortKind := strings.TrimPrefix(span.Kind, "SPAN_KIND_")
+			kindTag = " " + kindStyle.Render("["+shortKind+"]")
+		}
+
+		// Duration
+		durStr := fmtTraceDuration(span.DurationMs)
+		durStyle := lipgloss.NewStyle().Foreground(cText)
+
+		// Build the duration bar
+		spanStart := parseSpanTime(span.StartTime)
+		offsetMs := int(spanStart.Sub(traceStart).Milliseconds())
+		if offsetMs < 0 {
+			offsetMs = 0
+		}
+
+		bar := renderDurationBar(offsetMs, span.DurationMs, traceDurMs, barWidth, span.StatusCode)
+
+		// Assemble row
+		row := fmt.Sprintf(" %s %s %s %s%s %8s %s",
+			indent, statusIcon, opStyle.Render(opName), svcName, kindTag, durStyle.Render(durStr), bar)
+
+		rows = append(rows, row)
+	}
+
+	return rows
+}
+
+func buildTreeIndent(node *spanNode) string {
+	if node.depth == 0 {
+		return ""
+	}
+
+	var prefix string
+	if node.isLast {
+		prefix = "\u2514\u2500 " // corner connector
+	} else {
+		prefix = "\u251c\u2500 " // tee connector
+	}
+
+	// Add depth indentation
+	indent := strings.Repeat("  ", node.depth-1)
+	return lipgloss.NewStyle().Foreground(cDim).Render(indent + prefix)
+}
+
+func renderDurationBar(offsetMs, durationMs, totalMs, barWidth int, statusCode string) string {
+	if totalMs <= 0 || barWidth <= 0 {
+		return ""
+	}
+
+	// Calculate positions
+	offsetFrac := float64(offsetMs) / float64(totalMs)
+	durFrac := float64(durationMs) / float64(totalMs)
+
+	offsetChars := int(offsetFrac * float64(barWidth))
+	durChars := int(durFrac * float64(barWidth))
+	if durChars < 1 {
+		durChars = 1
+	}
+	if offsetChars+durChars > barWidth {
+		durChars = barWidth - offsetChars
+	}
+	if durChars < 0 {
+		durChars = 0
+	}
+	emptyAfter := barWidth - offsetChars - durChars
+	if emptyAfter < 0 {
+		emptyAfter = 0
+	}
+
+	emptyStyle := lipgloss.NewStyle().Foreground(cDim)
+	var fillStyle lipgloss.Style
+	if statusCode == "ERROR" || statusCode == "error" {
+		fillStyle = lipgloss.NewStyle().Foreground(cDanger)
+	} else {
+		fillStyle = lipgloss.NewStyle().Foreground(cBrand)
+	}
+
+	bar := emptyStyle.Render(strings.Repeat("\u2591", offsetChars)) +
+		fillStyle.Render(strings.Repeat("\u2588", durChars)) +
+		emptyStyle.Render(strings.Repeat("\u2591", emptyAfter))
+
+	return bar
+}
+
+func parseSpanTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			return time.Time{}
+		}
+	}
+	return t
+}
+
+func truncID(id string) string {
+	if len(id) > 16 {
+		return id[:16] + "..."
+	}
+	return id
+}
+
+// -- List View rendering --
 
 func (m tracesModel) renderHeader(w int) string {
 	title := lipgloss.NewStyle().Foreground(cBrand).Bold(true).Render("Traces")
