@@ -745,6 +745,62 @@ type CLIService struct {
 	Name string `json:"name"`
 }
 
+// CLIServiceHealth matches models.ServiceHealth JSON from /v1/services
+type CLIServiceHealth struct {
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	RequestCount int64   `json:"request_count"`
+	ErrorRate    float64 `json:"error_rate"`
+	P95Latency   float64 `json:"p95_latency"`
+	AvgLatency   float64 `json:"avg_latency"`
+	LastSeen     string  `json:"last_seen"`
+}
+
+// ServiceHealthListResponse is the response from /v1/services with health data
+type ServiceHealthListResponse struct {
+	Services []CLIServiceHealth `json:"services"`
+}
+
+// CLIServiceDetail matches models.ServiceDetail JSON
+type CLIServiceDetail struct {
+	Name         string           `json:"name"`
+	RequestCount int64            `json:"request_count"`
+	ErrorRate    float64          `json:"error_rate"`
+	P95Latency   float64          `json:"p95_latency"`
+	AvgLatency   float64          `json:"avg_latency"`
+	TopErrors    []CLIErrorSummary `json:"top_errors"`
+	Operations   []CLIServiceOp   `json:"operations"`
+}
+
+// CLIErrorSummary represents a summarized error with count
+type CLIErrorSummary struct {
+	Message string `json:"message"`
+	Count   int64  `json:"count"`
+}
+
+// CLIServiceOp represents metrics for a service operation
+type CLIServiceOp struct {
+	OperationName string  `json:"operation_name"`
+	Count         int64   `json:"count"`
+	ErrorRate     float64 `json:"error_rate"`
+	P95Latency    float64 `json:"p95_latency"`
+	AvgLatency    float64 `json:"avg_latency"`
+}
+
+// CLIServiceError is a single recent error span
+type CLIServiceError struct {
+	SpanID     string  `json:"span_id"`
+	Operation  string  `json:"operation"`
+	Message    string  `json:"message"`
+	DurationMs float64 `json:"duration_ms"`
+	Timestamp  string  `json:"timestamp"`
+}
+
+// ServiceErrorsResponse is the response from /v1/services/:name/errors
+type ServiceErrorsResponse struct {
+	Errors []CLIServiceError `json:"errors"`
+}
+
 // GetTraces fetches trace list with optional filters
 func (c *Client) GetTraces(service string, hasError bool, minDurationMs int, timeWindow string, limit, offset int) (*TraceListResponse, error) {
 	if c.APIKey == "" {
@@ -971,6 +1027,108 @@ func (c *Client) GetServices() (*ServiceListResponse, error) {
 	}
 
 	var data ServiceListResponse
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &data, nil
+}
+
+// GetServicesWithHealth fetches services with health metrics from /v1/services
+func (c *Client) GetServicesWithHealth() (*ServiceHealthListResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/services", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var data ServiceHealthListResponse
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &data, nil
+}
+
+// GetServiceDetail fetches detailed metrics for a service from /v1/services/:name/detail
+func (c *Client) GetServiceDetail(serviceName string) (*CLIServiceDetail, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/services/"+serviceName+"/detail", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var data CLIServiceDetail
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &data, nil
+}
+
+// GetServiceErrors fetches recent error spans for a service from /v1/services/:name/errors
+func (c *Client) GetServiceErrors(serviceName string) (*ServiceErrorsResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/services/"+serviceName+"/errors", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var data ServiceErrorsResponse
 	if err := json.Unmarshal(respBody, &data); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
