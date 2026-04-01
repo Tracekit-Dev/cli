@@ -476,6 +476,12 @@ type DashboardData struct {
 		Errors    int     `json:"errors"`
 		ErrorRate float64 `json:"error_rate"`
 	} `json:"error_hotspots"`
+	TimeSeries []struct {
+		Time        string `json:"time"`
+		Requests    int    `json:"requests"`
+		Errors      int    `json:"errors"`
+		AvgDuration int    `json:"avg_duration"`
+	} `json:"time_series"`
 	Timestamp string `json:"timestamp"`
 }
 
