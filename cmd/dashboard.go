@@ -374,20 +374,13 @@ func renderChartPanel(d *client.DashboardData, w int, title string, chartType st
 			lipgloss.NewStyle().Foreground(cAmber).Render("● p99")
 	}
 
-	// Build panel with title in border
+	// Build panel content (no title -- title goes in border)
 	content := combined.String() + xAxis + "\n" + summaryLine
 	if legend != "" {
 		content += "\n" + legend
 	}
 
-	panel := lipgloss.NewStyle().
-		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cBorder).
-		Padding(0, 1).
-		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render(title) + "\n" + content)
-
-	return panel
+	return titledPanel(title, content, w)
 }
 
 // buildYAxis creates Y-axis labels for chart rows
@@ -503,14 +496,7 @@ func renderServicesPanel(d *client.DashboardData, w int) string {
 		}
 	}
 
-	panel := lipgloss.NewStyle().
-		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cBorder).
-		Padding(0, 1).
-		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Services") + "\n" + content.String())
-
-	return panel
+	return titledPanel("Services", content.String(), w)
 }
 
 // -- Alerts Panel --
@@ -559,14 +545,7 @@ func renderAlertsPanel(d *client.DashboardData, w int) string {
 		content.WriteString(lipgloss.NewStyle().Foreground(cSuccess).Render(" None") + "\n")
 	}
 
-	panel := lipgloss.NewStyle().
-		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cBorder).
-		Padding(0, 1).
-		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Active Alerts") + "\n" + content.String())
-
-	return panel
+	return titledPanel("Active Alerts", content.String(), w)
 }
 
 // -- Error Hotspots --
@@ -582,14 +561,7 @@ func renderHotspots(d *client.DashboardData, w int) string {
 		))
 	}
 
-	panel := lipgloss.NewStyle().
-		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cBorder).
-		Padding(0, 1).
-		Render(lipgloss.NewStyle().Foreground(cText).Bold(true).Render("Error Hotspots") + "\n" + content.String())
-
-	return panel
+	return titledPanel("Error Hotspots", content.String(), w)
 }
 
 // -- Footer: "1 1h  2 6h  3 24h  .  r refresh  q quit" --
@@ -609,6 +581,51 @@ func renderFooter(m dashModel) string {
 	controls := lipgloss.NewStyle().Foreground(cDim).Render("r refresh  q quit")
 
 	return " " + windowBar + sep + controls
+}
+
+// -- Titled Panel: renders content inside a box with title embedded in the top border --
+
+func titledPanel(title string, content string, w int) string {
+	borderFg := lipgloss.NewStyle().Foreground(cBorder)
+	titleFg := lipgloss.NewStyle().Foreground(cText).Bold(true)
+
+	// Inner width = w - 2 (left/right border chars)
+	innerW := w - 2
+	if innerW < 0 {
+		innerW = 0
+	}
+
+	// Top border: ╭─ Title ───────────╮
+	titleStr := " " + title + " "
+	titleRendered := titleFg.Render(titleStr)
+	titlePlainLen := len(titleStr)
+	dashesAfter := innerW - 1 - titlePlainLen // 1 dash before title
+	if dashesAfter < 0 {
+		dashesAfter = 0
+	}
+	topLine := borderFg.Render("╭─") + titleRendered + borderFg.Render(strings.Repeat("─", dashesAfter)+"╮")
+
+	// Bottom border: ╰────────────────────╯
+	bottomLine := borderFg.Render("╰" + strings.Repeat("─", innerW) + "╯")
+
+	// Wrap each content line with side borders and 1-char padding
+	padW := innerW - 2 // subtract left+right padding spaces
+	if padW < 0 {
+		padW = 0
+	}
+	contentLines := strings.Split(content, "\n")
+	var body strings.Builder
+	for _, line := range contentLines {
+		// Pad or truncate line to fill the panel width
+		plainLen := lipgloss.Width(line)
+		pad := padW - plainLen
+		if pad < 0 {
+			pad = 0
+		}
+		body.WriteString(borderFg.Render("│") + " " + line + strings.Repeat(" ", pad) + " " + borderFg.Render("│") + "\n")
+	}
+
+	return topLine + "\n" + body.String() + bottomLine
 }
 
 // -- Helpers --
