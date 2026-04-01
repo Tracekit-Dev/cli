@@ -1136,3 +1136,284 @@ func (c *Client) GetServiceErrors(serviceName string) (*ServiceErrorsResponse, e
 	}
 	return &data, nil
 }
+
+// ========== Alert Rule Types ==========
+
+// CLIAlertRule represents an alert rule for CLI display
+type CLIAlertRule struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Description     *string   `json:"description,omitempty"`
+	Enabled         bool      `json:"enabled"`
+	AlertType       string    `json:"alert_type"`
+	ScopeType       string    `json:"scope_type"`
+	ScopeValue      *string   `json:"scope_value,omitempty"`
+	Metric          string    `json:"metric"`
+	Operator        string    `json:"operator"`
+	Threshold       float64   `json:"threshold"`
+	TimeWindow      int       `json:"time_window"`
+	Cooldown        int       `json:"cooldown"`
+	Severity        string    `json:"severity"`
+	CreatedAt       time.Time `json:"created_at"`
+	LastTriggeredAt *string   `json:"last_triggered_at,omitempty"`
+}
+
+// CLIAlertHistory represents an alert history entry for CLI display
+type CLIAlertHistory struct {
+	ID           string    `json:"id"`
+	AlertRuleID  string    `json:"alert_rule_id"`
+	TriggeredAt  time.Time `json:"triggered_at"`
+	CurrentValue float64   `json:"current_value"`
+	Threshold    float64   `json:"threshold"`
+	Message      string    `json:"message"`
+	Status       string    `json:"status"`
+}
+
+// CLIChannel represents a notification channel for CLI display
+type CLIChannel struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Enabled bool   `json:"enabled"`
+}
+
+// AlertRulesResponse wraps the alert rules list response
+type AlertRulesResponse struct {
+	Rules []CLIAlertRule `json:"rules"`
+}
+
+// AlertHistoryResponse wraps the alert history response
+type AlertHistoryResponse struct {
+	History []CLIAlertHistory `json:"history"`
+}
+
+// ChannelsResponse wraps the channels list response
+type ChannelsResponse struct {
+	Channels []CLIChannel `json:"channels"`
+}
+
+// CreateAlertRuleRequest represents the request to create an alert rule
+type CreateAlertRuleRequest struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	AlertType   string   `json:"alert_type"`
+	ScopeType   string   `json:"scope_type"`
+	ScopeValue  string   `json:"scope_value,omitempty"`
+	Metric      string   `json:"metric"`
+	Operator    string   `json:"operator"`
+	Threshold   float64  `json:"threshold"`
+	TimeWindow  int      `json:"time_window"`
+	Cooldown    int      `json:"cooldown"`
+	Severity    string   `json:"severity"`
+	ChannelIDs  []string `json:"channel_ids"`
+}
+
+// ========== Alert Rule Methods ==========
+
+// GetAlertRules fetches alert rules from /v1/alert-rules
+func (c *Client) GetAlertRules() (*AlertRulesResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/alert-rules", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result AlertRulesResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+// CreateAlertRule creates a new alert rule via POST /v1/alert-rules
+func (c *Client) CreateAlertRule(req CreateAlertRuleRequest) (*CLIAlertRule, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/alert-rules", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var rule CLIAlertRule
+	if err := json.Unmarshal(respBody, &rule); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &rule, nil
+}
+
+// DeleteAlertRule deletes an alert rule via DELETE /v1/alert-rules/:id
+func (c *Client) DeleteAlertRule(ruleID string) error {
+	if c.APIKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("DELETE", c.BaseURL+"/v1/alert-rules/"+ruleID, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// ToggleAlertRule toggles an alert rule enabled/disabled via POST /v1/alert-rules/:id/toggle
+func (c *Client) ToggleAlertRule(ruleID string, enabled bool) error {
+	if c.APIKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	body, err := json.Marshal(map[string]bool{"enabled": enabled})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/alert-rules/"+ruleID+"/toggle", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// GetAlertHistory fetches alert history for a rule from /v1/alert-rules/:id/history
+func (c *Client) GetAlertHistory(ruleID string) (*AlertHistoryResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/alert-rules/"+ruleID+"/history", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result AlertHistoryResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+// GetChannels fetches notification channels from /v1/channels
+func (c *Client) GetChannels() (*ChannelsResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	httpReq, err := http.NewRequest("GET", c.BaseURL+"/v1/channels", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result ChannelsResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &result, nil
+}
