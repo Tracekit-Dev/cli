@@ -1417,3 +1417,224 @@ func (c *Client) GetChannels() (*ChannelsResponse, error) {
 	}
 	return &result, nil
 }
+
+// ========== Triage Inbox Methods ==========
+
+// CLITriageItem represents a triage inbox item for CLI display
+type CLITriageItem struct {
+	ID              string    `json:"id"`
+	EntityType      string    `json:"entity_type"`
+	Title           string    `json:"title"`
+	Severity        string    `json:"severity"`
+	Status          string    `json:"status"`
+	ServiceName     string    `json:"service_name"`
+	TeamID          *string   `json:"team_id,omitempty"`
+	TeamName        *string   `json:"team_name,omitempty"`
+	Timestamp       time.Time `json:"timestamp"`
+	EscalationLevel int       `json:"escalation_level"`
+}
+
+// TriageInboxResponse wraps the list response
+type TriageInboxResponse struct {
+	Items      []CLITriageItem `json:"items"`
+	TotalCount int             `json:"total_count"`
+}
+
+// TriageTransitionRequest is the body for status transition endpoints
+type TriageTransitionRequest struct {
+	EntityType string `json:"entity_type"`
+	Note       string `json:"note,omitempty"`
+	Duration   string `json:"duration,omitempty"`
+}
+
+// GetTriageInbox fetches triage inbox items from /v1/triage-inbox with optional filters
+func (c *Client) GetTriageInbox(severity, entityType, status, team string) (*TriageInboxResponse, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("API key required")
+	}
+
+	url := c.BaseURL + "/v1/triage-inbox"
+	var params []string
+	if severity != "" {
+		params = append(params, "severity="+severity)
+	}
+	if entityType != "" {
+		params = append(params, "type="+entityType)
+	}
+	if status != "" {
+		params = append(params, "status="+status)
+	}
+	if team != "" {
+		params = append(params, "team="+team)
+	}
+	if len(params) > 0 {
+		url += "?" + strings.Join(params, "&")
+	}
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result TriageInboxResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+// AcknowledgeIncident acknowledges a triage item via POST /v1/triage-inbox/:id/acknowledge
+func (c *Client) AcknowledgeIncident(itemID, entityType string) error {
+	if c.APIKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	body, err := json.Marshal(TriageTransitionRequest{EntityType: entityType})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/triage-inbox/"+itemID+"/acknowledge", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// InvestigateIncident marks a triage item as investigating via POST /v1/triage-inbox/:id/investigate
+func (c *Client) InvestigateIncident(itemID, entityType string) error {
+	if c.APIKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	body, err := json.Marshal(TriageTransitionRequest{EntityType: entityType})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/triage-inbox/"+itemID+"/investigate", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// ResolveIncident resolves a triage item via POST /v1/triage-inbox/:id/resolve
+func (c *Client) ResolveIncident(itemID, entityType, note string) error {
+	if c.APIKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	body, err := json.Marshal(TriageTransitionRequest{EntityType: entityType, Note: note})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/triage-inbox/"+itemID+"/resolve", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// SnoozeIncident snoozes a triage item via POST /v1/triage-inbox/:id/snooze
+func (c *Client) SnoozeIncident(itemID, entityType, duration string) error {
+	if c.APIKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	body, err := json.Marshal(TriageTransitionRequest{EntityType: entityType, Duration: duration})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/triage-inbox/"+itemID+"/snooze", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("X-API-Key", c.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
