@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -13,6 +14,15 @@ type Config struct {
 	ServiceName           string
 	Enabled               string
 	CodeMonitoringEnabled string
+}
+
+// GlobalConfigPath returns the path to the global TraceKit config file (~/.tracekitconfig)
+func GlobalConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tracekitconfig")
 }
 
 // GetTraceEndpoint returns the full trace ingestion endpoint
@@ -31,22 +41,46 @@ func (c *Config) GetAPIBase() string {
 	return c.Endpoint
 }
 
-// Read reads TraceKit configuration from .env file
+// ReadWithFallback reads config using the fallback chain:
+// explicit envFlag path > local .env > global ~/.tracekitconfig
+func ReadWithFallback(envFlag string) (*Config, error) {
+	// 1. Explicit --env flag path
+	if envFlag != "" {
+		return readFromPath(envFlag)
+	}
+
+	// 2. Local .env in current directory
+	if _, err := os.Stat(".env"); err == nil {
+		return readFromPath(".env")
+	}
+
+	// 3. Global config fallback
+	globalPath := GlobalConfigPath()
+	if globalPath != "" {
+		if _, err := os.Stat(globalPath); err == nil {
+			return readFromPath(globalPath)
+		}
+	}
+
+	return nil, fmt.Errorf("no TraceKit config found (checked .env and %s)", globalPath)
+}
+
+// Read reads TraceKit configuration from .env file (legacy, calls ReadWithFallback)
 func Read() (*Config, error) {
-	envPath := ".env"
+	return ReadWithFallback("")
+}
 
-	// Check if file exists
-	if _, err := os.Stat(envPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf(".env file not found")
+// readFromPath reads TraceKit configuration from a specific file path
+func readFromPath(path string) (*Config, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("config file not found: %s", path)
 	}
 
-	// Read file
-	content, err := os.ReadFile(envPath)
+	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read .env file: %w", err)
+		return nil, fmt.Errorf("failed to read config file %s: %w", path, err)
 	}
 
-	// Parse config
 	config := &Config{}
 	lines := strings.Split(string(content), "\n")
 
@@ -83,15 +117,18 @@ func Read() (*Config, error) {
 
 	// Validate required fields
 	if config.APIKey == "" {
-		return nil, fmt.Errorf("TRACEKIT_API_KEY not found in .env")
+		return nil, fmt.Errorf("TRACEKIT_API_KEY not found in %s", path)
 	}
 
 	return config, nil
 }
 
-// Save writes TraceKit configuration to .env file
-func Save(config *Config) error {
+// Save writes TraceKit configuration to the specified path (defaults to .env)
+func Save(cfg *Config, paths ...string) error {
 	envPath := ".env"
+	if len(paths) > 0 && paths[0] != "" {
+		envPath = paths[0]
+	}
 
 	// TraceKit config block
 	tracekitConfig := fmt.Sprintf(`
@@ -101,9 +138,9 @@ TRACEKIT_ENDPOINT=%s
 TRACEKIT_SERVICE_NAME=%s
 TRACEKIT_ENABLED=%s
 TRACEKIT_CODE_MONITORING_ENABLED=%s
-`, config.APIKey, config.Endpoint, config.ServiceName, config.Enabled, config.CodeMonitoringEnabled)
+`, cfg.APIKey, cfg.Endpoint, cfg.ServiceName, cfg.Enabled, cfg.CodeMonitoringEnabled)
 
-	// Check if .env exists
+	// Check if file exists
 	var existingContent string
 	if _, err := os.Stat(envPath); err == nil {
 		// File exists, read it
@@ -147,6 +184,14 @@ TRACEKIT_CODE_MONITORING_ENABLED=%s
 	} else {
 		// File doesn't exist, create new with TraceKit config
 		existingContent = tracekitConfig
+	}
+
+	// Ensure parent directory exists (for global config path)
+	dir := filepath.Dir(envPath)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
 	}
 
 	// Write to file
