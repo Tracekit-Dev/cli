@@ -94,10 +94,15 @@ func RequireAuthForURL(envFlag string, url string) (*Config, error) {
 // ReadWithFallback reads config using the fallback chain:
 // explicit envFlag path > global ~/.tracekitconfig (active profile) > local .env
 func ReadWithFallback(envFlag string) (*Config, error) {
-	// 1. Explicit --env flag: URL (profile lookup) or file path (legacy)
+	// 1. Explicit --env flag: URL, tag, or file path
 	if envFlag != "" {
 		if strings.HasPrefix(envFlag, "http://") || strings.HasPrefix(envFlag, "https://") {
 			return RequireAuthForURL("", envFlag)
+		}
+		// Try tag lookup from global config before treating as file path
+		cfg, err := resolveByTag(envFlag)
+		if err == nil {
+			return cfg, nil
 		}
 		return readLegacyFromPath(envFlag)
 	}
@@ -297,6 +302,27 @@ func TagProfile(urlOrTag string, tag string) error {
 
 	cf.Profiles[key].Tag = tag
 	return writeConfigFile(globalPath, cf)
+}
+
+// resolveByTag looks up a profile by tag name from the global config.
+func resolveByTag(tag string) (*Config, error) {
+	globalPath := GlobalConfigPath()
+	if globalPath == "" {
+		return nil, fmt.Errorf("no home directory")
+	}
+	cf, err := readConfigFile(globalPath)
+	if err != nil {
+		return nil, err
+	}
+	for url, profile := range cf.Profiles {
+		if profile.Tag != "" && strings.EqualFold(profile.Tag, tag) {
+			if profile.Endpoint == "" {
+				profile.Endpoint = url
+			}
+			return profile, nil
+		}
+	}
+	return nil, fmt.Errorf("no profile with tag %q", tag)
 }
 
 // resolveProfile finds a profile key by URL or tag name.

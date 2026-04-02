@@ -57,6 +57,7 @@ type loginWizardModel struct {
 	// Flags
 	apiURL string
 	useDev bool
+	tag    string
 
 	// Navigation
 	nav       navModel
@@ -266,6 +267,7 @@ func (m loginWizardModel) saveConfigCmd() tea.Cmd {
 			ServiceName:           m.serviceName,
 			Enabled:               "true",
 			CodeMonitoringEnabled: "true",
+			Tag:                   m.tag,
 		}
 
 		if err := config.SaveGlobal(cfg); err != nil {
@@ -448,6 +450,7 @@ func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().String("email", "", "Your email address")
 	loginCmd.Flags().String("api-url", "", "API base URL (default: https://app.tracekit.dev)")
+	loginCmd.Flags().String("tag", "", "Tag this profile with a short name (e.g. prod, local, staging)")
 	loginCmd.Flags().Bool("dev", false, "")
 	loginCmd.Flags().MarkHidden("dev")
 }
@@ -455,6 +458,7 @@ func init() {
 func runLogin(cmd *cobra.Command, args []string) error {
 	email, _ := cmd.Flags().GetString("email")
 	apiURL, _ := cmd.Flags().GetString("api-url")
+	tag, _ := cmd.Flags().GetString("tag")
 	useDev, _ := cmd.Flags().GetBool("dev")
 
 	if useDev {
@@ -473,6 +477,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		savePath:    config.GlobalConfigPath(),
 		apiURL:      apiURL,
 		useDev:      useDev,
+		tag:         tag,
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
