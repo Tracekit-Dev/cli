@@ -71,8 +71,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Launch Bubbletea program
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	result, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("init wizard error: %w", err)
+	}
+
+	// Check if user wants to switch to another command
+	if m, ok := result.(initWizardModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
 	}
 
 	return nil

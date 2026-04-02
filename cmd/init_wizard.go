@@ -52,32 +52,33 @@ type initInstallStepDoneMsg struct {
 
 type initSpinnerTickMsg struct{}
 
-// -- New types --
+// -- Types --
 
 type alertSuggestion struct {
 	name      string
-	metric    string  // "error_rate", "p95_latency", "health_check"
-	operator  string  // "greater_than", "equals"
+	metric    string
+	operator  string
 	threshold float64
-	severity  string // "warning", "critical"
+	severity  string
 }
 
 type installStep struct {
-	label string // "Saving configuration", "Sending test trace", "Installing SDK"
-	done  bool
-	err   string
+	label   string
+	done    bool
+	err     string
+	skipped bool
 }
 
-// Spinner frames for animated install progress
 var initSpinnerFrames = []string{"\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9", "\xe2\xa0\xb8", "\xe2\xa0\xbc", "\xe2\xa0\xb4", "\xe2\xa0\xa6", "\xe2\xa0\xa7", "\xe2\xa0\x87", "\xe2\xa0\x8f"}
 
 // -- Init wizard model --
+// Flow: 0=account -> 1=verify -> 2=extras (optional) -> 3=setup (auto) -> 4=complete
 
 type initWizardModel struct {
 	apiClient *client.Client
 	width     int
 	height    int
-	step      int // 0=account, 1=verify, 2=framework, 3=alerts, 4=install, 5=complete
+	step      int // 0=account, 1=verify, 2=extras, 3=setup, 4=complete
 	quitting  bool
 	err       error
 
@@ -92,37 +93,39 @@ type initWizardModel struct {
 	sessionID string
 	code      string
 
-	// Step 2: Framework (health endpoint detection)
-	verifyResp     *client.VerifyResponse
+	// Verify response (available after step 1)
+	verifyResp *client.VerifyResponse
+
+	// Step 2: Extras (optional -- user can skip all with 's')
 	healthEndpoints []string
 	healthSelected  []bool
 	healthCursor    int
-
-	// Step 3: Alerts
 	alertSuggestions []alertSuggestion
 	alertSelected   []bool
 	alertCursor     int
 	alertsCreated   int
+	extrasView      string // "health", "alerts" -- sub-views within extras step
+	configSaved     bool   // true once we've saved to ~/.tracekitconfig
 
-	// Step 4: Install (pre-install config choice + install steps)
-	configChoosing    bool // true when showing config location choice
-	configChoiceCursor int  // 0=local .env, 1=global ~/.tracekitconfig
-	useGlobalConfig   bool // true if user chose global config
-	installSteps      []installStep
-	installCurrent    int
-	installDone       bool
-	spinnerFrame      int
+	// Step 3: Setup (auto-executing)
+	installSteps   []installStep
+	installCurrent int
+	installDone    bool
+	spinnerFrame   int
+	skipExtras     bool // true if user skipped health/alerts/SDK
 
-	// Step 5: Complete
+	// Step 4: Complete
 	dashboardURL string
 	apiKeyMasked string
+	nav          navModel
+	navTarget    string
 
 	// Flags from cobra
 	apiURL string
 	useDev bool
 }
 
-var initWizardSteps = []string{"Account", "Verify", "Framework", "Alerts", "Install", "Complete"}
+var initWizardSteps = []string{"Account", "Verify", "Options", "Setup", "Done"}
 
 // -- Init --
 
@@ -140,6 +143,11 @@ func (m initWizardModel) Init() tea.Cmd {
 
 func (m initWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -158,26 +166,32 @@ func (m initWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case initVerifiedMsg:
 		m.verifyResp = msg.resp
 		m.err = nil
+		// Immediately save config to ~/.tracekitconfig (core requirement)
+		return m, m.saveConfigCmd()
+
+	case initConfigSavedMsg:
+		m.configSaved = true
+		// Now go to extras step with health detection
 		m.step = 2
-		// Detect health endpoints for the framework step
+		m.extrasView = "health"
 		return m, m.detectHealthCmd()
 
 	case initHealthDetectedMsg:
 		m.healthEndpoints = msg.endpoints
 		m.healthSelected = make([]bool, len(msg.endpoints))
 		for i := range m.healthSelected {
-			m.healthSelected[i] = true // pre-select all
+			m.healthSelected[i] = true
 		}
 		m.healthCursor = 0
 		return m, nil
 
 	case initAlertsCreatedMsg:
 		m.alertsCreated = msg.count
-		m.step = 4
-		// Show config location choice before starting install
-		m.configChoosing = true
-		m.configChoiceCursor = 0
-		return m, nil
+		// Start setup step (test trace + SDK)
+		m.step = 3
+		m.buildInstallSteps()
+		m.installCurrent = 0
+		return m, tea.Batch(m.runInstallStepCmd(0), m.spinnerTickCmd())
 
 	case initInstallStepDoneMsg:
 		if msg.index >= 0 && msg.index < len(m.installSteps) {
@@ -187,26 +201,27 @@ func (m initWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		next := msg.index + 1
+		// Skip steps that are marked skipped
+		for next < len(m.installSteps) && m.installSteps[next].skipped {
+			m.installSteps[next].done = true
+			next++
+		}
 		if next < len(m.installSteps) {
 			m.installCurrent = next
 			return m, m.runInstallStepCmd(next)
 		}
-		// All install steps done
+		// All done
 		m.installDone = true
 		m.dashboardURL = m.verifyResp.DashboardURL
 		m.apiKeyMasked = utils.MaskAPIKey(m.verifyResp.APIKey)
-		m.step = 5
+		m.step = 4
 		return m, nil
 
 	case initSpinnerTickMsg:
-		if m.step == 4 && !m.installDone {
+		if m.step == 3 && !m.installDone {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(initSpinnerFrames)
 			return m, m.spinnerTickCmd()
 		}
-		return m, nil
-
-	case initConfigSavedMsg:
-		// Legacy message -- no longer used in new flow but kept for compatibility
 		return m, nil
 
 	case initErrMsg:
@@ -223,17 +238,26 @@ func (m initWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m initWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Global keys
+	// Nav overlay on complete step
+	if m.step == 4 {
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
+	}
+
 	switch key {
 	case "ctrl+c":
 		m.quitting = true
 		return m, tea.Quit
 	case "esc":
-		// Back navigation: allowed on steps 1-3 (verify, framework, alerts)
-		// Not allowed on install (step 4) or complete (step 5)
-		if m.step >= 1 && m.step <= 3 {
+		if m.step == 1 {
 			m.err = nil
-			m.step--
+			m.code = ""
+			m.step = 0
+		} else if m.step == 2 && m.extrasView == "alerts" {
+			m.extrasView = "health"
 		}
 		return m, nil
 	}
@@ -244,16 +268,11 @@ func (m initWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case 1:
 		return m.handleVerifyKey(msg)
 	case 2:
-		return m.handleFrameworkKey(msg)
+		return m.handleExtrasKey(msg)
 	case 3:
-		return m.handleAlertsKey(msg)
-	case 4:
-		if m.configChoosing {
-			return m.handleConfigChoiceKey(msg)
-		}
-		// Install step is auto-executing, no key handling
+		// Auto-executing, no keys
 		return m, nil
-	case 5:
+	case 4:
 		return m.handleCompleteKey(msg)
 	}
 
@@ -322,13 +341,29 @@ func (m initWizardModel) handleVerifyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m initWizardModel) handleFrameworkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m initWizardModel) handleExtrasKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// Skip everything -- jump straight to setup with only test trace
+	if key == "s" {
+		m.skipExtras = true
+		m.step = 3
+		m.buildInstallSteps()
+		m.installCurrent = 0
+		return m, tea.Batch(m.runInstallStepCmd(0), m.spinnerTickCmd())
+	}
+
+	if m.extrasView == "health" {
+		return m.handleHealthKey(key)
+	}
+	return m.handleAlertsKey(key)
+}
+
+func (m initWizardModel) handleHealthKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter":
-		// Advance to alerts step
-		m.step = 3
+		// Advance to alerts sub-view
+		m.extrasView = "alerts"
 		m.populateAlertSuggestions()
 		return m, nil
 	case "j", "down":
@@ -344,16 +379,13 @@ func (m initWizardModel) handleFrameworkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 			m.healthSelected[m.healthCursor] = !m.healthSelected[m.healthCursor]
 		}
 	}
-
 	return m, nil
 }
 
-func (m initWizardModel) handleAlertsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-
+func (m initWizardModel) handleAlertsKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter":
-		// Create selected alerts and advance
+		// Create selected alerts and advance to setup
 		return m, m.createAlertsCmd()
 	case "j", "down":
 		if len(m.alertSuggestions) > 0 && m.alertCursor < len(m.alertSuggestions)-1 {
@@ -368,45 +400,11 @@ func (m initWizardModel) handleAlertsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.alertSelected[m.alertCursor] = !m.alertSelected[m.alertCursor]
 		}
 	}
-
-	return m, nil
-}
-
-func (m initWizardModel) handleConfigChoiceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-
-	switch key {
-	case "enter":
-		// Confirm choice and start install
-		m.useGlobalConfig = m.configChoiceCursor == 1
-		m.configChoosing = false
-		configLabel := "Saving configuration to .env"
-		if m.useGlobalConfig {
-			configLabel = "Saving configuration to ~/.tracekitconfig"
-		}
-		m.installSteps = []installStep{
-			{label: configLabel},
-			{label: "Sending test trace"},
-			{label: "Installing SDK"},
-		}
-		m.installCurrent = 0
-		return m, tea.Batch(m.runInstallStepCmd(0), m.spinnerTickCmd())
-	case "j", "down":
-		if m.configChoiceCursor < 1 {
-			m.configChoiceCursor++
-		}
-	case "k", "up":
-		if m.configChoiceCursor > 0 {
-			m.configChoiceCursor--
-		}
-	}
-
 	return m, nil
 }
 
 func (m initWizardModel) handleCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	switch key {
+	switch msg.String() {
 	case "enter", "q":
 		m.quitting = true
 		return m, tea.Quit
@@ -414,7 +412,7 @@ func (m initWizardModel) handleCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 	return m, nil
 }
 
-// -- Populate helpers --
+// -- Helpers --
 
 func (m *initWizardModel) populateAlertSuggestions() {
 	fwType := ""
@@ -446,12 +444,23 @@ func (m *initWizardModel) populateAlertSuggestions() {
 		}
 	}
 
-	// Pre-select all
 	m.alertSelected = make([]bool, len(m.alertSuggestions))
 	for i := range m.alertSelected {
 		m.alertSelected[i] = true
 	}
 	m.alertCursor = 0
+}
+
+func (m *initWizardModel) buildInstallSteps() {
+	m.installSteps = []installStep{
+		{label: "Sending test trace"},
+	}
+	if !m.skipExtras && m.framework != nil {
+		recommended := sdk.GetRecommendedSDK(m.framework.Type, m.framework.Name)
+		if recommended != nil {
+			m.installSteps = append(m.installSteps, installStep{label: "Installing " + recommended.Name})
+		}
+	}
 }
 
 // -- Tea commands --
@@ -491,12 +500,28 @@ func (m initWizardModel) verifyCmd() tea.Cmd {
 			SessionID: m.sessionID,
 			Code:      m.code,
 		}
-
 		resp, err := m.apiClient.Verify(req)
 		if err != nil {
 			return initErrMsg{err: fmt.Errorf("verification failed: %w", err)}
 		}
 		return initVerifiedMsg{resp: resp}
+	}
+}
+
+func (m initWizardModel) saveConfigCmd() tea.Cmd {
+	return func() tea.Msg {
+		cfg := &config.Config{
+			APIKey:                m.verifyResp.APIKey,
+			UserID:                m.verifyResp.UserID,
+			Endpoint:              m.apiClient.BaseURL,
+			ServiceName:           m.serviceName,
+			Enabled:               "true",
+			CodeMonitoringEnabled: "true",
+		}
+		if err := config.SaveGlobal(cfg); err != nil {
+			return initErrMsg{err: fmt.Errorf("failed to save config: %w", err)}
+		}
+		return initConfigSavedMsg{}
 	}
 }
 
@@ -511,9 +536,9 @@ func (m initWizardModel) createAlertsCmd() tea.Cmd {
 	return func() tea.Msg {
 		created := 0
 		apiCli := m.apiClient
-		// Set API key from verify response so CreateAlertRule works
 		if m.verifyResp != nil {
 			apiCli.APIKey = m.verifyResp.APIKey
+			apiCli.UserID = m.verifyResp.UserID
 		}
 
 		for i, suggestion := range m.alertSuggestions {
@@ -547,46 +572,32 @@ func (m initWizardModel) createAlertsCmd() tea.Cmd {
 
 func (m initWizardModel) runInstallStepCmd(index int) tea.Cmd {
 	return func() tea.Msg {
+		if index >= len(m.installSteps) {
+			return initInstallStepDoneMsg{index: index, err: nil}
+		}
+
 		switch index {
 		case 0:
-			// Always save auth to ~/.tracekitconfig (global config)
+			// Send test trace
 			cfg := &config.Config{
-				APIKey:                m.verifyResp.APIKey,
-				UserID:                m.verifyResp.UserID,
-				Endpoint:              m.apiClient.BaseURL,
-				ServiceName:           m.serviceName,
-				Enabled:               "true",
-				CodeMonitoringEnabled: "true",
+				APIKey:      m.verifyResp.APIKey,
+				Endpoint:    m.apiClient.BaseURL,
+				ServiceName: m.serviceName,
+				Enabled:     "true",
 			}
-			err := config.SaveGlobal(cfg)
-			// Also save to local .env if user chose that option
-			if !m.useGlobalConfig && err == nil {
-				config.Save(cfg)
-			}
+			err := sendTestTraceInternal(cfg)
 			return initInstallStepDoneMsg{index: 0, err: err}
 
 		case 1:
-			// Send test trace
-			cfg := &config.Config{
-				APIKey:                m.verifyResp.APIKey,
-				Endpoint:              m.apiClient.BaseURL,
-				ServiceName:           m.serviceName,
-				Enabled:               "true",
-				CodeMonitoringEnabled: "true",
-			}
-			err := sendTestTraceInternal(cfg)
-			return initInstallStepDoneMsg{index: 1, err: err}
-
-		case 2:
-			// Install SDK
+			// Install SDK (only if not skipped)
 			if m.framework != nil {
 				recommended := sdk.GetRecommendedSDK(m.framework.Type, m.framework.Name)
 				if recommended != nil {
 					err := sdk.Install(*recommended)
-					return initInstallStepDoneMsg{index: 2, err: err}
+					return initInstallStepDoneMsg{index: 1, err: err}
 				}
 			}
-			return initInstallStepDoneMsg{index: 2, err: nil}
+			return initInstallStepDoneMsg{index: 1, err: nil}
 		}
 
 		return initInstallStepDoneMsg{index: index, err: nil}
@@ -613,16 +624,24 @@ func (m initWizardModel) View() string {
 
 	var b strings.Builder
 
-	// Header
-	b.WriteString("\n")
-	header := lipgloss.NewStyle().Foreground(cBrand).Bold(true).Padding(0, 1).Render("TraceKit Setup")
-	b.WriteString(header)
-	b.WriteString("\n")
+	// Banner
+	brand := lipgloss.Color("#6366f1")
+	logo := lipgloss.NewStyle().Foreground(brand).Bold(true).Render(
+		"  ████████╗██████╗  █████╗  ██████╗███████╗██╗  ██╗██╗████████╗\n" +
+			"  ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝██║ ██╔╝██║╚══██╔══╝\n" +
+			"     ██║   ██████╔╝███████║██║     █████╗  █████╔╝ ██║   ██║\n" +
+			"     ██║   ██╔══██╗██╔══██║██║     ██╔══╝  ██╔═██╗ ██║   ██║\n" +
+			"     ██║   ██║  ██║██║  ██║╚██████╗███████╗██║  ██╗██║   ██║\n" +
+			"     ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝")
+	tagline := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#818cf8")).
+		Italic(true).
+		Render("        Zero-friction APM for modern applications")
+	b.WriteString("\n" + logo + "\n\n" + tagline + "\n\n")
 
 	// Step bar
 	stepBar := renderInitWizardSteps(initWizardSteps, m.step)
-	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 1).Render(stepBar))
-	b.WriteString("\n\n")
+	b.WriteString(" " + stepBar + "\n\n")
 
 	// Step content
 	switch m.step {
@@ -631,224 +650,181 @@ func (m initWizardModel) View() string {
 	case 1:
 		b.WriteString(m.renderVerifyStep())
 	case 2:
-		b.WriteString(m.renderFrameworkStep())
+		b.WriteString(m.renderExtrasStep())
 	case 3:
-		b.WriteString(m.renderAlertsStep())
+		b.WriteString(m.renderSetupStep())
 	case 4:
-		b.WriteString(m.renderInstallStep())
-	case 5:
 		b.WriteString(m.renderCompleteStep())
 	}
 
-	// Error display
+	// Error
 	if m.err != nil {
 		b.WriteString("\n")
-		errMsg := lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error()))
-		b.WriteString(errMsg)
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")).Padding(0, 2).Render("Error: " + m.err.Error()))
 		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("Press r to retry"))
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Padding(0, 2).Render("Press r to retry"))
 	}
 
 	// Footer
 	b.WriteString("\n\n")
-	if m.step < 5 && m.step != 4 {
-		footer := lipgloss.NewStyle().Foreground(cDim).Render(" Esc back | Ctrl+C quit")
-		b.WriteString(footer)
-	} else if m.step == 4 && !m.configChoosing {
-		footer := lipgloss.NewStyle().Foreground(cDim).Render(" Installing... | Ctrl+C quit")
-		b.WriteString(footer)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	switch m.step {
+	case 0, 1:
+		b.WriteString(" " + dim.Render("enter submit  esc back  ctrl+c quit"))
+	case 2:
+		b.WriteString(" " + dim.Render("enter continue  s skip all  esc back  ctrl+c quit"))
+	case 3:
+		b.WriteString(" " + dim.Render("setting up...  ctrl+c quit"))
+	case 4:
+		b.WriteString(" " + dim.Render("q quit  ") + NavHint())
 	}
 	b.WriteString("\n")
+
+	// Nav overlay on complete step
+	if m.step == 4 {
+		if overlay := m.nav.ViewNav(w); overlay != "" {
+			b.WriteString("\n" + overlay + "\n")
+		}
+	}
 
 	return b.String()
 }
 
 func (m initWizardModel) renderAccountStep() string {
 	var b strings.Builder
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	success := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
 
 	// Framework detection result
 	if m.framework != nil {
 		if m.framework.Name != "generic" {
-			fwText := fmt.Sprintf("Detected: %s (%s)", m.framework.Name, m.framework.Type)
-			b.WriteString(lipgloss.NewStyle().Foreground(cSuccess).Padding(0, 2).Render("* " + fwText))
+			b.WriteString("  " + success.Render("Detected: "+m.framework.Name+" ("+m.framework.Type+")") + "\n\n")
 		} else {
-			b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("No framework detected, continuing with generic setup"))
+			b.WriteString("  " + dim.Render("No framework detected, continuing with generic setup") + "\n\n")
 		}
-		b.WriteString("\n\n")
 	}
 
-	// Email input
-	b.WriteString(lipgloss.NewStyle().Foreground(cText).Padding(0, 2).Render("Email: "))
-	cursor := lipgloss.NewStyle().Foreground(cBrand).Render("|")
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Render(m.email))
-	b.WriteString(cursor)
-	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("Enter your email and press Enter"))
+	b.WriteString("  " + text.Bold(true).Render("Enter your email address") + "\n\n")
+	b.WriteString("  " + dim.Render("Email: ") + text.Render(m.email) + lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1")).Render("_") + "\n")
 
 	return b.String()
 }
 
 func (m initWizardModel) renderVerifyStep() string {
 	var b strings.Builder
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	success := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
 
-	info := fmt.Sprintf("Verification code sent to %s", m.email)
-	b.WriteString(lipgloss.NewStyle().Foreground(cSuccess).Padding(0, 2).Render("* " + info))
-	b.WriteString("\n\n")
+	b.WriteString("  " + success.Render("Verification code sent to "+m.email) + "\n\n")
+	b.WriteString("  " + text.Bold(true).Render("Enter the 6-digit code from your email") + "\n\n")
 
-	// Code input
-	b.WriteString(lipgloss.NewStyle().Foreground(cText).Padding(0, 2).Render("Code: "))
-	cursor := lipgloss.NewStyle().Foreground(cBrand).Render("|")
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Render(m.code))
-	b.WriteString(cursor)
-	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("Enter 6-digit verification code and press Enter"))
+	// Code display
+	boxes := ""
+	for i := 0; i < 6; i++ {
+		if i < len(m.code) {
+			boxes += text.Bold(true).Render(" " + string(m.code[i]) + " ")
+		} else if i == len(m.code) {
+			boxes += lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1")).Render(" _ ")
+		} else {
+			boxes += dim.Render(" . ")
+		}
+	}
+	b.WriteString("  " + dim.Render("Code: ") + boxes + "\n")
 
 	return b.String()
 }
 
-func (m initWizardModel) renderFrameworkStep() string {
+func (m initWizardModel) renderExtrasStep() string {
 	var b strings.Builder
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	success := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	brand := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1"))
 
-	// Framework info
-	if m.framework != nil && m.framework.Name != "generic" {
-		fwText := fmt.Sprintf("Detected: %s (%s)", m.framework.Name, m.framework.Type)
-		b.WriteString(lipgloss.NewStyle().Foreground(cSuccess).Padding(0, 2).Render("* " + fwText))
-		b.WriteString("\n\n")
-	}
+	b.WriteString("  " + success.Render("Account verified! Config saved to ~/.tracekitconfig") + "\n\n")
 
-	// Health endpoints
-	if len(m.healthEndpoints) > 0 {
-		b.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Padding(0, 2).Render("Health check endpoints found:"))
-		b.WriteString("\n\n")
+	if m.extrasView == "health" {
+		b.WriteString("  " + text.Bold(true).Render("Health Check Endpoints") + "\n\n")
 
-		for i, ep := range m.healthEndpoints {
+		if len(m.healthEndpoints) > 0 {
+			for i, ep := range m.healthEndpoints {
+				checkbox := "[ ] "
+				if i < len(m.healthSelected) && m.healthSelected[i] {
+					checkbox = "[x] "
+				}
+				style := text
+				prefix := "    "
+				if i == m.healthCursor {
+					style = brand.Bold(true)
+					prefix = "  > "
+				}
+				b.WriteString(prefix + style.Render(checkbox+ep) + "\n")
+			}
+			b.WriteString("\n  " + dim.Render("j/k navigate  space toggle  enter next  s skip all"))
+		} else {
+			b.WriteString("  " + dim.Render("No health endpoints detected") + "\n\n")
+			b.WriteString("  " + dim.Render("enter next  s skip all"))
+		}
+	} else {
+		// Alerts sub-view
+		b.WriteString("  " + text.Bold(true).Render("Suggested Alert Rules") + "\n\n")
+
+		for i, suggestion := range m.alertSuggestions {
 			checkbox := "[ ] "
-			if i < len(m.healthSelected) && m.healthSelected[i] {
+			if i < len(m.alertSelected) && m.alertSelected[i] {
 				checkbox = "[x] "
 			}
-
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Padding(0, 2)
-			if i == m.healthCursor {
-				style = style.Foreground(cBrand).Bold(true)
-				checkbox = "> " + checkbox
-			} else {
-				checkbox = "  " + checkbox
+			label := fmt.Sprintf("%s (%s %s %.0f)", suggestion.name, suggestion.metric, suggestion.operator, suggestion.threshold)
+			style := text
+			prefix := "    "
+			if i == m.alertCursor {
+				style = brand.Bold(true)
+				prefix = "  > "
 			}
-
-			b.WriteString(style.Render(checkbox + ep))
-			b.WriteString("\n")
+			b.WriteString(prefix + style.Render(checkbox+label) + "\n")
 		}
-
-		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("j/k navigate | space toggle | enter continue"))
-	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("No health endpoints detected"))
-		b.WriteString("\n\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("Press enter to continue"))
+		b.WriteString("\n  " + dim.Render("j/k navigate  space toggle  enter create & continue  s skip all"))
 	}
 
 	return b.String()
 }
 
-func (m initWizardModel) renderAlertsStep() string {
+func (m initWizardModel) renderSetupStep() string {
 	var b strings.Builder
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
 
-	b.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Padding(0, 2).Render("Suggested alert rules:"))
-	b.WriteString("\n\n")
-
-	for i, suggestion := range m.alertSuggestions {
-		checkbox := "[ ] "
-		if i < len(m.alertSelected) && m.alertSelected[i] {
-			checkbox = "[x] "
-		}
-
-		label := fmt.Sprintf("%s (%s %s %.0f, %s)",
-			suggestion.name, suggestion.metric, suggestion.operator, suggestion.threshold, suggestion.severity)
-
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Padding(0, 2)
-		if i == m.alertCursor {
-			style = style.Foreground(cBrand).Bold(true)
-			checkbox = "> " + checkbox
-		} else {
-			checkbox = "  " + checkbox
-		}
-
-		b.WriteString(style.Render(checkbox + label))
-		b.WriteString("\n")
-	}
-
-	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("j/k navigate | space toggle | enter confirm"))
-
-	return b.String()
-}
-
-func (m initWizardModel) renderInstallStep() string {
-	var b strings.Builder
-
-	// Show config location choice before install
-	if m.configChoosing {
-		b.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Padding(0, 2).Render("Where should TraceKit save configuration?"))
-		b.WriteString("\n\n")
-
-		options := []struct {
-			label string
-			desc  string
-		}{
-			{label: ".env (current directory)", desc: "Best for project-specific config"},
-			{label: "~/.tracekitconfig (global)", desc: "Shared across all projects"},
-		}
-
-		for i, opt := range options {
-			prefix := "  "
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Padding(0, 2)
-			if i == m.configChoiceCursor {
-				prefix = "> "
-				style = style.Foreground(cBrand).Bold(true)
-			}
-
-			b.WriteString(style.Render(fmt.Sprintf("%s%s", prefix, opt.label)))
-			b.WriteString("\n")
-			b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 6).Render(opt.desc))
-			b.WriteString("\n")
-		}
-
-		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("j/k navigate | enter confirm"))
-		return b.String()
-	}
-
-	b.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Padding(0, 2).Render("Setting up your project..."))
-	b.WriteString("\n\n")
+	b.WriteString("  " + text.Bold(true).Render("Setting up your project...") + "\n\n")
 
 	for i, step := range m.installSteps {
 		var icon string
-		if step.done {
+		if step.skipped {
+			icon = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("-")
+		} else if step.done {
 			if step.err != "" {
-				// Red X for failed step
-				icon = lipgloss.NewStyle().Foreground(cDanger).Render("\xe2\x9c\x97")
+				icon = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")).Render("x")
 			} else {
-				// Green checkmark for completed step
-				icon = lipgloss.NewStyle().Foreground(cSuccess).Render("\xe2\x9c\x93")
+				icon = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Render("*")
 			}
 		} else if i == m.installCurrent {
-			// Animated spinner for active step
 			frame := m.spinnerFrame % len(initSpinnerFrames)
-			icon = lipgloss.NewStyle().Foreground(cBrand).Render(initSpinnerFrames[frame])
+			icon = lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1")).Render(initSpinnerFrames[frame])
 		} else {
-			// Dim circle for pending step
-			icon = lipgloss.NewStyle().Foreground(cMuted).Render("\xe2\x97\x8b")
+			icon = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("o")
 		}
 
 		label := step.label
-		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+		labelStyle := text
 		if step.done && step.err != "" {
 			label += " - " + step.err
-			labelStyle = labelStyle.Foreground(cDanger)
+			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+		} else if step.skipped {
+			label += " (skipped)"
+			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 		}
 
-		b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(icon + " " + labelStyle.Render(label)))
-		b.WriteString("\n")
+		b.WriteString("  " + icon + " " + labelStyle.Render(label) + "\n")
 	}
 
 	return b.String()
@@ -856,104 +832,50 @@ func (m initWizardModel) renderInstallStep() string {
 
 func (m initWizardModel) renderCompleteStep() string {
 	var b strings.Builder
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	success := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	brand := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1"))
 
-	// Summary box
-	title := lipgloss.NewStyle().Foreground(cSuccess).Bold(true).Padding(0, 2).Render("Setup Complete!")
-	b.WriteString(title)
-	b.WriteString("\n\n")
+	b.WriteString("  " + success.Bold(true).Render("Setup Complete!") + "\n\n")
 
-	dimLabel := lipgloss.NewStyle().Foreground(cDim)
-	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	b.WriteString("  " + dim.Render("Config:     ") + text.Render("~/.tracekitconfig") + "\n")
 
-	// Config location
-	configLoc := ".env"
-	if m.useGlobalConfig {
-		configLoc = "~/.tracekitconfig"
-	}
-	b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-		dimLabel.Render("Config:     ") + valStyle.Render(configLoc)))
-	b.WriteString("\n")
-
-	// Framework
 	if m.framework != nil && m.framework.Name != "generic" {
-		b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-			dimLabel.Render("Framework:  ") + valStyle.Render(fmt.Sprintf("%s (%s)", m.framework.Name, m.framework.Type))))
-		b.WriteString("\n")
+		b.WriteString("  " + dim.Render("Framework:  ") + text.Render(m.framework.Name+" ("+m.framework.Type+")") + "\n")
 	}
 
-	// Health endpoints
-	healthCount := 0
-	for i, sel := range m.healthSelected {
-		if sel && i < len(m.healthEndpoints) {
-			healthCount++
-		}
+	if m.alertsCreated > 0 {
+		b.WriteString("  " + dim.Render("Alerts:     ") + text.Render(fmt.Sprintf("%d rules created", m.alertsCreated)) + "\n")
 	}
-	if healthCount > 0 {
-		b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-			dimLabel.Render("Health:     ") + valStyle.Render(fmt.Sprintf("%d endpoints configured", healthCount))))
-	} else {
-		b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-			dimLabel.Render("Health:     ") + valStyle.Render("none detected")))
-	}
-	b.WriteString("\n")
 
-	// Alerts
-	b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-		dimLabel.Render("Alerts:     ") + valStyle.Render(fmt.Sprintf("%d rules created", m.alertsCreated))))
-	b.WriteString("\n")
+	b.WriteString("  " + dim.Render("Dashboard:  ") + brand.Render(m.dashboardURL) + "\n")
+	b.WriteString("  " + dim.Render("API Key:    ") + text.Render(m.apiKeyMasked) + "\n")
 
-	// SDK status
-	sdkStatus := "skipped"
-	if m.framework != nil {
-		recommended := sdk.GetRecommendedSDK(m.framework.Type, m.framework.Name)
-		if recommended != nil {
-			if len(m.installSteps) > 2 && m.installSteps[2].done && m.installSteps[2].err == "" {
-				sdkStatus = "installed"
-			} else if len(m.installSteps) > 2 && m.installSteps[2].err != "" {
-				sdkStatus = "failed"
-			}
-		}
-	}
-	b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-		dimLabel.Render("SDK:        ") + valStyle.Render(sdkStatus)))
-	b.WriteString("\n")
-
-	// Dashboard
-	b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-		dimLabel.Render("Dashboard:  ") + valStyle.Render(m.dashboardURL)))
-	b.WriteString("\n")
-
-	// API Key
-	b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
-		dimLabel.Render("API Key:    ") + valStyle.Render(m.apiKeyMasked)))
-	b.WriteString("\n")
-
-	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(cBrand).Padding(0, 2).Render(
-		"Run `tracekit dashboard` to see your data"))
-	b.WriteString("\n\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("Press q to exit"))
+	b.WriteString("\n  " + dim.Render("Next steps:") + "\n")
+	b.WriteString("  " + text.Render("  tracekit dashboard") + dim.Render("   -- view live dashboard") + "\n")
+	b.WriteString("  " + text.Render("  tracekit traces") + dim.Render("      -- browse traces") + "\n")
+	b.WriteString("  " + text.Render("  tracekit alerts") + dim.Render("      -- manage alerts") + "\n")
 
 	return b.String()
 }
 
-// renderInitWizardSteps renders the step indicator bar for the init wizard.
 func renderInitWizardSteps(steps []string, current int) string {
 	var parts []string
 	for i, step := range steps {
-		label := fmt.Sprintf("%d.%s", i+1, step)
+		label := fmt.Sprintf("[%d] %s", i+1, step)
 		if i < current {
-			parts = append(parts, lipgloss.NewStyle().Foreground(cSuccess).Render(label))
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Render(label+" *"))
 		} else if i == current {
-			parts = append(parts, lipgloss.NewStyle().Foreground(cBrand).Bold(true).Render(label))
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1")).Bold(true).Render(label))
 		} else {
-			parts = append(parts, lipgloss.NewStyle().Foreground(cDim).Render(label))
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(label))
 		}
 	}
-	return strings.Join(parts, " > ")
+	sep := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(" > ")
+	return strings.Join(parts, sep)
 }
 
-// newInitWizardModel creates a new init wizard model with derived service name.
 func newInitWizardModel(apiClient *client.Client, apiURL string, useDev bool) initWizardModel {
 	cwd, _ := os.Getwd()
 	serviceName := filepath.Base(cwd)
@@ -964,5 +886,6 @@ func newInitWizardModel(apiClient *client.Client, apiURL string, useDev bool) in
 		serviceName: serviceName,
 		apiURL:      apiURL,
 		useDev:      useDev,
+		nav:         newNavModel("init"),
 	}
 }
