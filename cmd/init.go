@@ -20,7 +20,7 @@ import (
 	"github.com/yourusername/context.io/cli/internal/ui"
 )
 
-const CLIVersion = "1.0.0"
+const CLIVersion = "2.0.0"
 
 var initCmd = &cobra.Command{
 	Use:   "init",
