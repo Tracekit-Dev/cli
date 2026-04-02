@@ -61,6 +61,8 @@ type dashModel struct {
 	lastFetch time.Time
 	quitting  bool
 	window    string // "1h", "6h", "24h"
+	nav       navModel
+	navTarget string // set when user picks a nav target
 }
 
 type tickMsg time.Time
@@ -82,7 +84,17 @@ func (m dashModel) Init() tea.Cmd {
 
 func (m dashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
 	case tea.KeyMsg:
+		// Nav overlay gets first crack at keys
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
@@ -200,6 +212,12 @@ func (m dashModel) View() string {
 	b.WriteString(" ")
 	b.WriteString(renderFooter(m))
 	b.WriteString("\n")
+
+	// Nav overlay (rendered on top if active)
+	if overlay := m.nav.ViewNav(w); overlay != "" {
+		// Place overlay at bottom-right area
+		b.WriteString("\n" + overlay + "\n")
+	}
 
 	return b.String()
 }
@@ -588,7 +606,7 @@ func renderFooter(m dashModel) string {
 	}
 	windowBar := strings.Join(parts, "  ")
 	sep := lipgloss.NewStyle().Foreground(cDim).Render("  ·  ")
-	controls := lipgloss.NewStyle().Foreground(cDim).Render("r refresh  q quit")
+	controls := lipgloss.NewStyle().Foreground(cDim).Render("r refresh  q quit  ") + NavHint()
 
 	return " " + windowBar + sep + controls
 }
@@ -751,9 +769,16 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	p := tea.NewProgram(dashModel{client: c, window: "1h"}, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	model := dashModel{client: c, window: "1h", nav: newNavModel("dashboard")}
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	result, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("dashboard error: %w", err)
+	}
+
+	// Check if user wants to switch to another command
+	if m, ok := result.(dashModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
 	}
 	return nil
 }

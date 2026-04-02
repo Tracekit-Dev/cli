@@ -110,6 +110,8 @@ type tracesModel struct {
 	err        error
 	loading    bool
 	quitting   bool
+	nav        navModel
+	navTarget  string
 
 	// Filter state
 	filterService    string
@@ -139,6 +141,10 @@ func (m tracesModel) Init() tea.Cmd {
 
 func (m tracesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -177,6 +183,12 @@ func (m tracesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Nav overlay gets first crack at keys
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
 		return m.handleKey(msg)
 	}
 
@@ -458,6 +470,11 @@ func (m tracesModel) View() string {
 	// Footer help
 	b.WriteString(m.renderFooter())
 	b.WriteString("\n")
+
+	// Nav overlay (rendered on top if active)
+	if overlay := m.nav.ViewNav(w); overlay != "" {
+		b.WriteString("\n" + overlay + "\n")
+	}
 
 	return b.String()
 }
@@ -904,7 +921,7 @@ func (m tracesModel) renderPagination(w int) string {
 
 func (m tracesModel) renderFooter() string {
 	help := lipgloss.NewStyle().Foreground(cDim).Render(
-		" j/k navigate | enter open | / service | e errors | d duration | t time range | r refresh | q quit")
+		" j/k navigate | enter open | / service | e errors | d duration | t time range | r refresh | q quit") + " " + NavHint()
 	return help
 }
 
@@ -1025,11 +1042,18 @@ func runTraces(cmd *cobra.Command, args []string) error {
 		limit:            30,
 		filterTimeWindow: "24h",
 		loading:          true,
+		nav:              newNavModel("traces"),
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	result, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("traces error: %w", err)
+	}
+
+	// Check if user wants to switch to another command
+	if m, ok := result.(tracesModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
 	}
 	return nil
 }

@@ -130,6 +130,8 @@ type incidentsModel struct {
 	loading    bool
 	err        error
 	quitting   bool
+	nav        navModel
+	navTarget  string
 
 	// View state: "list", "resolve", "snooze"
 	view string
@@ -159,6 +161,10 @@ func (m incidentsModel) Init() tea.Cmd {
 
 func (m incidentsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -196,6 +202,12 @@ func (m incidentsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Nav overlay gets first crack at keys
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
 		return m.handleIncidentKey(msg)
 	}
 
@@ -504,6 +516,11 @@ func (m incidentsModel) renderIncidentListView(w int) string {
 	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Render(helpBar))
 	b.WriteString("\n")
 
+	// Nav overlay (rendered on top if active)
+	if overlay := m.nav.ViewNav(w); overlay != "" {
+		b.WriteString("\n" + overlay + "\n")
+	}
+
 	return b.String()
 }
 
@@ -667,7 +684,7 @@ func (m incidentsModel) buildHelpBar() string {
 	}
 
 	actions = append(actions, "s severity", "t type", "w team", "Esc clear", "q quit")
-	return " " + strings.Join(actions, " | ")
+	return " " + strings.Join(actions, " | ") + " " + NavHint()
 }
 
 // -- Helpers --
@@ -840,11 +857,18 @@ func runIncidents(cmd *cobra.Command, args []string) error {
 		view:            "list",
 		loading:         true,
 		snoozeCursor:    0,
+		nav:             newNavModel("incidents"),
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	result, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("incidents error: %w", err)
+	}
+
+	// Check if user wants to switch to another command
+	if m, ok := result.(incidentsModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
 	}
 	return nil
 }

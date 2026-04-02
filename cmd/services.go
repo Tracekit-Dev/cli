@@ -89,6 +89,8 @@ type servicesModel struct {
 	apiClient *client.Client
 	width     int
 	height    int
+	nav       navModel
+	navTarget string
 
 	// Service list
 	services []client.CLIServiceHealth
@@ -111,6 +113,10 @@ func (m servicesModel) Init() tea.Cmd {
 
 func (m servicesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -145,6 +151,12 @@ func (m servicesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Nav overlay gets first crack at keys
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
 		return m.handleSvcKey(msg)
 	}
 
@@ -314,9 +326,14 @@ func (m servicesModel) renderListView(w int) string {
 
 	// Footer
 	footer := lipgloss.NewStyle().Foreground(cDim).Render(
-		" j/k navigate | enter open | r refresh | q quit")
+		" j/k navigate | enter open | r refresh | q quit") + " " + NavHint()
 	b.WriteString(footer)
 	b.WriteString("\n")
+
+	// Nav overlay (rendered on top if active)
+	if overlay := m.nav.ViewNav(w); overlay != "" {
+		b.WriteString("\n" + overlay + "\n")
+	}
 
 	return b.String()
 }
@@ -554,11 +571,18 @@ func runServices(cmd *cobra.Command, args []string) error {
 		view:      "list",
 		loading:   true,
 		detailTab: "metrics",
+		nav:       newNavModel("services"),
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	result, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("services error: %w", err)
+	}
+
+	// Check if user wants to switch to another command
+	if m, ok := result.(servicesModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
 	}
 	return nil
 }

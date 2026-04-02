@@ -144,6 +144,8 @@ type alertsModel struct {
 	apiClient *client.Client
 	width     int
 	height    int
+	nav       navModel
+	navTarget string
 
 	// List view
 	rules    []client.CLIAlertRule
@@ -179,6 +181,10 @@ func (m alertsModel) Init() tea.Cmd {
 
 func (m alertsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -233,6 +239,12 @@ func (m alertsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Nav overlay gets first crack at keys
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
 		return m.handleAlertKey(msg)
 	}
 
@@ -616,9 +628,14 @@ func (m alertsModel) renderAlertListView(w int) string {
 
 	// Footer
 	footer := lipgloss.NewStyle().Foreground(cDim).Render(
-		" n new | d delete | t toggle | h history | r refresh | q quit")
+		" n new | d delete | t toggle | h history | r refresh | q quit") + " " + NavHint()
 	b.WriteString(footer)
 	b.WriteString("\n")
+
+	// Nav overlay (rendered on top if active)
+	if overlay := m.nav.ViewNav(w); overlay != "" {
+		b.WriteString("\n" + overlay + "\n")
+	}
 
 	return b.String()
 }
@@ -1057,11 +1074,18 @@ func runAlerts(cmd *cobra.Command, args []string) error {
 		apiClient: c,
 		view:      "list",
 		loading:   true,
+		nav:       newNavModel("alerts"),
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	result, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("alerts error: %w", err)
+	}
+
+	// Check if user wants to switch to another command
+	if m, ok := result.(alertsModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
 	}
 	return nil
 }
