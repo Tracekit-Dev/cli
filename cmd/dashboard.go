@@ -145,8 +145,8 @@ func (m dashModel) View() string {
 		w = 80
 	}
 	if w < 40 {
-		return lipgloss.NewStyle().Foreground(cWarning).Padding(1, 1).Render(
-			"Terminal too narrow (min 40 cols)\nCurrent: " + fmt.Sprintf("%d", w) + " cols\nPlease widen your terminal.")
+		return m.appendNavOverlay(lipgloss.NewStyle().Foreground(cWarning).Padding(1, 1).Render(
+			"Terminal too narrow (min 40 cols)\nCurrent: " + fmt.Sprintf("%d", w) + " cols\nPlease widen your terminal."))
 	}
 
 	// Full terminal width for panels, no extra margins

@@ -263,9 +263,12 @@ func (m servicesModel) View() string {
 		w = 100
 	}
 
+	dim := lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2)
+	hint := "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Padding(0, 2).Render("q quit  "+NavHint()) + "\n"
+
 	if m.view == "detail" {
 		if m.loading {
-			return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading service details...") + "\n"
+			return m.appendNavOverlay("\n" + dim.Render("Loading service details...") + hint)
 		}
 		if m.detail != nil {
 			var content string
@@ -278,17 +281,16 @@ func (m servicesModel) View() string {
 		}
 	}
 
-	// List view
 	if m.loading && len(m.services) == 0 {
-		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading services...") + "\n"
+		return m.appendNavOverlay("\n" + dim.Render("Loading services...") + hint)
 	}
 
 	if m.err != nil {
-		return "\n" + lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error())) + "\n"
+		return m.appendNavOverlay("\n" + lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error())) + hint)
 	}
 
 	if len(m.services) == 0 {
-		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("No services found") + "\n"
+		return m.appendNavOverlay("\n" + dim.Render("No services found") + hint)
 	}
 
 	return m.renderListView(w)

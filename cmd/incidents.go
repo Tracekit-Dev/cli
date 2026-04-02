@@ -422,12 +422,14 @@ func (m incidentsModel) View() string {
 // -- List View --
 
 func (m incidentsModel) renderIncidentListView(w int) string {
+	hint := "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Padding(0, 2).Render("q quit  "+NavHint()) + "\n"
+
 	if m.loading && len(m.items) == 0 {
-		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading incidents...") + "\n"
+		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading incidents...") + hint
 	}
 
 	if m.err != nil {
-		return "\n" + lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error())) + "\n"
+		return "\n" + lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error())) + hint
 	}
 
 	var b strings.Builder

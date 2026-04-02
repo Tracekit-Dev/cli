@@ -582,16 +582,18 @@ func (m alertsModel) View() string {
 // -- List View --
 
 func (m alertsModel) renderAlertListView(w int) string {
+	hint := "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Padding(0, 2).Render("q quit  "+NavHint()) + "\n"
+
 	if m.loading && len(m.rules) == 0 {
-		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading alert rules...") + "\n"
+		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading alert rules...") + hint
 	}
 
 	if m.err != nil {
-		return "\n" + lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error())) + "\n"
+		return "\n" + lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error())) + hint
 	}
 
 	if len(m.rules) == 0 {
-		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("No alert rules configured. Press n to create one.") + "\n"
+		return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("No alert rules configured. Press n to create one.") + hint
 	}
 
 	var b strings.Builder
