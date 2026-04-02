@@ -18,16 +18,20 @@ import (
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Login to existing TraceKit account",
-	Long: `Login to your existing TraceKit account and generate a new API key
-for this project.
+	Long: `Login to your existing TraceKit account and generate a new API key.
 
 This command will:
   1. Verify your email with a verification code
   2. Generate a new API key for your organization
-  3. Update your .env file with the new configuration
+  3. Save configuration to ~/.tracekitconfig (or .env with --env flag)
+
+All CLI commands will automatically find your API key from ~/.tracekitconfig,
+so you don't need to pass it every time.
 
 Example:
-  tracekit login`,
+  tracekit login
+  tracekit login --email=dev@example.com
+  tracekit login --env .env           # save to local .env instead`,
 	RunE: runLogin,
 }
 
@@ -115,22 +119,29 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	ui.PrintSuccess("Login successful!")
 	fmt.Println()
 
-	// Step 5: Save TraceKit config to .env
+	// Step 5: Save TraceKit config
+	// Determine save path: --env flag > global ~/.tracekitconfig (login is typically run without a project)
 	cfg := &config.Config{
-		APIKey:                 verifyResp.APIKey,
-		Endpoint:               apiClient.BaseURL + "/v1/traces",
-		ServiceName:            serviceName,
-		Enabled:                "true",
-		CodeMonitoringEnabled:  "true",
+		APIKey:                verifyResp.APIKey,
+		Endpoint:              apiClient.BaseURL,
+		ServiceName:           serviceName,
+		Enabled:               "true",
+		CodeMonitoringEnabled: "true",
 	}
 
-	if err := config.Save(cfg); err != nil {
-		ui.PrintWarning(fmt.Sprintf("Failed to save .env file: %v", err))
+	savePath := EnvFlag // from --env flag
+	if savePath == "" {
+		// Default to global config for login (user may not be in a project directory)
+		savePath = config.GlobalConfigPath()
+	}
+
+	if err := config.Save(cfg, savePath); err != nil {
+		ui.PrintWarning(fmt.Sprintf("Failed to save config to %s: %v", savePath, err))
 		fmt.Println()
-		ui.PrintMuted("📝 Manual setup required:")
-		ui.PrintMuted(fmt.Sprintf("   Add to your .env file: TRACEKIT_API_KEY=%s", verifyResp.APIKey))
+		ui.PrintMuted("Manual setup required:")
+		ui.PrintMuted(fmt.Sprintf("   Add TRACEKIT_API_KEY=%s to your .env or ~/.tracekitconfig", verifyResp.APIKey))
 	} else {
-		ui.PrintSuccess("API key saved to .env")
+		ui.PrintSuccess(fmt.Sprintf("API key saved to %s", savePath))
 	}
 	fmt.Println()
 
@@ -147,10 +158,10 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	steps := []string{
-		"Your new API key has been saved to .env",
+		fmt.Sprintf("Your API key has been saved to %s", savePath),
 		"Run 'tracekit status' to verify your setup",
-		"Run 'tracekit test' to send a test trace",
-		"Visit " + verifyResp.DashboardURL + " to view traces",
+		"Run 'tracekit dashboard' to view your dashboard",
+		"Visit " + verifyResp.DashboardURL + " to view traces in browser",
 	}
 	ui.PrintNextSteps(steps)
 
