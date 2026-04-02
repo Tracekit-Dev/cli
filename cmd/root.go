@@ -11,6 +11,9 @@ var Version = "dev"
 var CommitHash = "unknown"
 var BuildDate = "unknown"
 
+// EnvFlag holds the --env flag value for custom config file path
+var EnvFlag string
+
 var rootCmd = &cobra.Command{
 	Use:   "tracekit",
 	Short: "TraceKit CLI - Zero-friction APM setup",
@@ -34,4 +37,7 @@ func Execute() error {
 func init() {
 	// Custom version template with commit hash and build date
 	rootCmd.SetVersionTemplate(fmt.Sprintf("tracekit v%s (%s, %s)\n", Version, CommitHash, BuildDate))
+
+	// Global --env flag for custom config file path
+	rootCmd.PersistentFlags().StringVar(&EnvFlag, "env", "", "path to env/config file (default: .env, fallback: ~/.tracekitconfig)")
 }
