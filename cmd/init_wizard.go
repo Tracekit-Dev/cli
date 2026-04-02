@@ -549,19 +549,20 @@ func (m initWizardModel) runInstallStepCmd(index int) tea.Cmd {
 	return func() tea.Msg {
 		switch index {
 		case 0:
-			// Save configuration to chosen location
+			// Always save auth to ~/.tracekitconfig (global config)
 			cfg := &config.Config{
 				APIKey:                m.verifyResp.APIKey,
+				UserID:                m.verifyResp.UserID,
 				Endpoint:              m.apiClient.BaseURL,
 				ServiceName:           m.serviceName,
 				Enabled:               "true",
 				CodeMonitoringEnabled: "true",
 			}
-			var savePath string
-			if m.useGlobalConfig {
-				savePath = config.GlobalConfigPath()
+			err := config.SaveGlobal(cfg)
+			// Also save to local .env if user chose that option
+			if !m.useGlobalConfig && err == nil {
+				config.Save(cfg)
 			}
-			err := config.Save(cfg, savePath)
 			return initInstallStepDoneMsg{index: 0, err: err}
 
 		case 1:

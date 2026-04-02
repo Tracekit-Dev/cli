@@ -13,8 +13,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
-	"github.com/yourusername/context.io/cli/internal/client"
-	"github.com/yourusername/context.io/cli/internal/config"
 )
 
 var askCmd = &cobra.Command{
@@ -35,7 +33,6 @@ Examples:
 
 func init() {
 	rootCmd.AddCommand(askCmd)
-	askCmd.Flags().String("api-key", "", "TraceKit API key (overrides .env)")
 	askCmd.Flags().String("url", "", "API base URL")
 	askCmd.Flags().Bool("dev", false, "")
 	askCmd.Flags().MarkHidden("dev")
@@ -51,27 +48,10 @@ type traceRef struct {
 func runAsk(cmd *cobra.Command, args []string) error {
 	question := args[0]
 
-	apiKey, _ := cmd.Flags().GetString("api-key")
-	customURL, _ := cmd.Flags().GetString("url")
-	isDev, _ := cmd.Flags().GetBool("dev")
-
-	if apiKey == "" {
-		cfg, err := config.ReadWithFallback(EnvFlag)
-		if err != nil {
-			return fmt.Errorf("no API key provided. Use --api-key or run 'tracekit init' first")
-		}
-		apiKey = cfg.APIKey
+	c, err := NewAuthenticatedClient(cmd)
+	if err != nil {
+		return err
 	}
-
-	baseURL := client.DefaultBaseURL
-	if customURL != "" {
-		baseURL = customURL
-	} else if isDev {
-		baseURL = client.DevBaseURL
-	}
-
-	c := client.NewClient(baseURL)
-	c.APIKey = apiKey
 
 	// Start spinner goroutine
 	firstToken := make(chan struct{}, 1)

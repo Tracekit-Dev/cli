@@ -119,29 +119,25 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	ui.PrintSuccess("Login successful!")
 	fmt.Println()
 
-	// Step 5: Save TraceKit config
-	// Determine save path: --env flag > global ~/.tracekitconfig (login is typically run without a project)
+	// Step 5: Always save auth to ~/.tracekitconfig (global config)
 	cfg := &config.Config{
 		APIKey:                verifyResp.APIKey,
+		UserID:                verifyResp.UserID,
 		Endpoint:              apiClient.BaseURL,
 		ServiceName:           serviceName,
 		Enabled:               "true",
 		CodeMonitoringEnabled: "true",
 	}
 
-	savePath := EnvFlag // from --env flag
-	if savePath == "" {
-		// Default to global config for login (user may not be in a project directory)
-		savePath = config.GlobalConfigPath()
-	}
+	savePath := config.GlobalConfigPath()
 
-	if err := config.Save(cfg, savePath); err != nil {
+	if err := config.SaveGlobal(cfg); err != nil {
 		ui.PrintWarning(fmt.Sprintf("Failed to save config to %s: %v", savePath, err))
 		fmt.Println()
 		ui.PrintMuted("Manual setup required:")
-		ui.PrintMuted(fmt.Sprintf("   Add TRACEKIT_API_KEY=%s to your .env or ~/.tracekitconfig", verifyResp.APIKey))
+		ui.PrintMuted(fmt.Sprintf("   Add TRACEKIT_API_KEY=%s to ~/.tracekitconfig", verifyResp.APIKey))
 	} else {
-		ui.PrintSuccess(fmt.Sprintf("API key saved to %s", savePath))
+		ui.PrintSuccess(fmt.Sprintf("Authenticated as %s -- saved to %s", email, savePath))
 	}
 	fmt.Println()
 

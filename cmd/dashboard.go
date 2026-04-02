@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/yourusername/context.io/cli/internal/client"
-	"github.com/yourusername/context.io/cli/internal/config"
 	"github.com/yourusername/context.io/cli/internal/ui"
 )
 
@@ -31,7 +30,6 @@ Examples:
 
 func init() {
 	rootCmd.AddCommand(dashboardCmd)
-	dashboardCmd.Flags().String("api-key", "", "TraceKit API key (overrides .env)")
 	dashboardCmd.Flags().String("url", "", "API base URL (default: https://app.tracekit.dev)")
 	dashboardCmd.Flags().Bool("dev", false, "")
 	dashboardCmd.Flags().MarkHidden("dev")
@@ -748,27 +746,10 @@ func avg(data []float64) float64 {
 }
 
 func runDashboard(cmd *cobra.Command, args []string) error {
-	apiKey, _ := cmd.Flags().GetString("api-key")
-	customURL, _ := cmd.Flags().GetString("url")
-	isDev, _ := cmd.Flags().GetBool("dev")
-
-	if apiKey == "" {
-		cfg, err := config.ReadWithFallback(EnvFlag)
-		if err != nil {
-			return fmt.Errorf("no API key provided. Use --api-key or run 'tracekit init' first")
-		}
-		apiKey = cfg.APIKey
+	c, err := NewAuthenticatedClient(cmd)
+	if err != nil {
+		return err
 	}
-
-	baseURL := client.DefaultBaseURL
-	if customURL != "" {
-		baseURL = customURL
-	} else if isDev {
-		baseURL = client.DevBaseURL
-	}
-
-	c := client.NewClient(baseURL)
-	c.APIKey = apiKey
 
 	p := tea.NewProgram(dashModel{client: c, window: "1h"}, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/yourusername/context.io/cli/internal/client"
-	"github.com/yourusername/context.io/cli/internal/config"
 )
 
 var alertsCmd = &cobra.Command{
@@ -32,7 +31,6 @@ Key bindings:
 
 func init() {
 	rootCmd.AddCommand(alertsCmd)
-	alertsCmd.Flags().String("api-key", "", "TraceKit API key (overrides .env)")
 	alertsCmd.Flags().String("url", "", "API base URL")
 	alertsCmd.Flags().Bool("dev", false, "")
 	alertsCmd.Flags().MarkHidden("dev")
@@ -1050,27 +1048,10 @@ func renderWizardSteps(steps []string, current int) string {
 // -- Runner --
 
 func runAlerts(cmd *cobra.Command, args []string) error {
-	apiKey, _ := cmd.Flags().GetString("api-key")
-	customURL, _ := cmd.Flags().GetString("url")
-	isDev, _ := cmd.Flags().GetBool("dev")
-
-	if apiKey == "" {
-		cfg, err := config.ReadWithFallback(EnvFlag)
-		if err != nil {
-			return fmt.Errorf("no API key provided. Use --api-key or run 'tracekit init' first")
-		}
-		apiKey = cfg.APIKey
+	c, err := NewAuthenticatedClient(cmd)
+	if err != nil {
+		return err
 	}
-
-	baseURL := client.DefaultBaseURL
-	if customURL != "" {
-		baseURL = customURL
-	} else if isDev {
-		baseURL = client.DevBaseURL
-	}
-
-	c := client.NewClient(baseURL)
-	c.APIKey = apiKey
 
 	model := alertsModel{
 		apiClient: c,

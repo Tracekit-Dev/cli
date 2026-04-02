@@ -25,7 +25,16 @@ const (
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
-	APIKey     string // Optional, for authenticated requests
+	APIKey     string // Required for authenticated requests
+	UserID     string // UUID of the authenticated user
+}
+
+// setAuthHeaders sets X-API-Key and X-User-ID on the request
+func (c *Client) setAuthHeaders(req *http.Request) {
+	req.Header.Set("X-API-Key", c.APIKey)
+	if c.UserID != "" {
+		req.Header.Set("X-User-ID", c.UserID)
+	}
 }
 
 // NewClient creates a new TraceKit API client
@@ -69,6 +78,7 @@ type VerifyRequest struct {
 // VerifyResponse is the response from verification
 type VerifyResponse struct {
 	APIKey         string `json:"api_key"`
+	UserID         string `json:"user_id"`
 	OrganizationID string `json:"organization_id"`
 	ServiceName    string `json:"service_name"`
 	DashboardURL   string `json:"dashboard_url"`
@@ -175,7 +185,7 @@ func (c *Client) GetStatus() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -270,7 +280,7 @@ func (c *Client) CreateRelease(req *CreateReleaseRequest) (*CreateReleaseRespons
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -317,7 +327,7 @@ func (c *Client) FinalizeRelease(version, service string) (*CreateReleaseRespons
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -363,7 +373,7 @@ func (c *Client) CreateDeploy(version, service string, req *CreateDeployRequest)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -404,7 +414,7 @@ func (c *Client) ListReleases(page, pageSize int, service string) (*ReleaseListR
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -505,7 +515,7 @@ func (c *Client) GetDashboard(window string) (*DashboardData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -622,7 +632,7 @@ func (c *Client) UploadSourceMap(debugID, release, filename string, mapData []by
 	}
 
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	// Use longer timeout for large uploads
 	uploadClient := &http.Client{
@@ -665,7 +675,7 @@ func (c *Client) DeleteSourceMaps(release string) (*SourceMapDeleteResponse, err
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -842,7 +852,7 @@ func (c *Client) GetTraces(service string, hasError bool, minDurationMs int, tim
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -876,7 +886,7 @@ func (c *Client) GetTrace(traceID string) (*TraceDetailResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1011,7 +1021,7 @@ func (c *Client) GetServices() (*ServiceListResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1045,7 +1055,7 @@ func (c *Client) GetServicesWithHealth() (*ServiceHealthListResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1079,7 +1089,7 @@ func (c *Client) GetServiceDetail(serviceName string) (*CLIServiceDetail, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1113,7 +1123,7 @@ func (c *Client) GetServiceErrors(serviceName string) (*ServiceErrorsResponse, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1220,7 +1230,7 @@ func (c *Client) GetAlertRules() (*AlertRulesResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1259,7 +1269,7 @@ func (c *Client) CreateAlertRule(req CreateAlertRuleRequest) (*CLIAlertRule, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -1294,7 +1304,7 @@ func (c *Client) DeleteAlertRule(ruleID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1329,7 +1339,7 @@ func (c *Client) ToggleAlertRule(ruleID string, enabled bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -1360,7 +1370,7 @@ func (c *Client) GetAlertHistory(ruleID string) (*AlertHistoryResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1394,7 +1404,7 @@ func (c *Client) GetChannels() (*ChannelsResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1475,7 +1485,7 @@ func (c *Client) GetTriageInbox(severity, entityType, status, team string) (*Tri
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -1514,7 +1524,7 @@ func (c *Client) AcknowledgeIncident(itemID, entityType string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -1549,7 +1559,7 @@ func (c *Client) InvestigateIncident(itemID, entityType string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -1584,7 +1594,7 @@ func (c *Client) ResolveIncident(itemID, entityType, note string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -1619,7 +1629,7 @@ func (c *Client) SnoozeIncident(itemID, entityType, duration string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	httpReq.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(httpReq)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(httpReq)
