@@ -277,6 +277,37 @@ func SetActiveProfile(url string) error {
 	return writeConfigFile(globalPath, cf)
 }
 
+// RemoveProfile deletes a saved profile by URL.
+func RemoveProfile(url string) error {
+	globalPath := GlobalConfigPath()
+	if globalPath == "" {
+		return fmt.Errorf("could not determine home directory")
+	}
+
+	cf, err := readConfigFile(globalPath)
+	if err != nil {
+		return err
+	}
+
+	key := normalizeURL(url)
+	if _, ok := cf.Profiles[key]; !ok {
+		return fmt.Errorf("no profile for %s", url)
+	}
+
+	delete(cf.Profiles, key)
+
+	// If we removed the active profile, switch to another one
+	if cf.Active == key {
+		cf.Active = ""
+		for k := range cf.Profiles {
+			cf.Active = k
+			break
+		}
+	}
+
+	return writeConfigFile(globalPath, cf)
+}
+
 // writeConfigFile writes the config file as indented JSON.
 func writeConfigFile(path string, cf *configFile) error {
 	data, err := json.MarshalIndent(cf, "", "  ")
