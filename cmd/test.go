@@ -40,7 +40,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	ui.PrintSection("📋 Reading Configuration")
 	fmt.Println()
 
-	cfg, err := config.Read()
+	cfg, err := config.ReadWithFallback(EnvFlag)
 	if err != nil {
 		ui.PrintError("No TraceKit configuration found")
 		ui.PrintMuted("   Run 'tracekit init' to set up your project")

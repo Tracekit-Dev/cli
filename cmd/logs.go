@@ -372,7 +372,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	errorsOnly, _ := cmd.Flags().GetBool("errors")
 
 	if apiKey == "" {
-		cfg, err := config.Read()
+		cfg, err := config.ReadWithFallback(EnvFlag)
 		if err != nil {
 			return fmt.Errorf("no API key provided. Use --api-key or run 'tracekit init' first")
 		}

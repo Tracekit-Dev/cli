@@ -67,7 +67,7 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	ui.PrintSection("🚀 Subscription Upgrade")
 	fmt.Println()
 
-	cfg, err := config.Read()
+	cfg, err := config.ReadWithFallback(EnvFlag)
 	if err != nil || cfg.APIKey == "" {
 		ui.PrintError("You must be logged in to upgrade")
 		fmt.Println()

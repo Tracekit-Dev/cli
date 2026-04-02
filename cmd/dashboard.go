@@ -753,7 +753,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	isDev, _ := cmd.Flags().GetBool("dev")
 
 	if apiKey == "" {
-		cfg, err := config.Read()
+		cfg, err := config.ReadWithFallback(EnvFlag)
 		if err != nil {
 			return fmt.Errorf("no API key provided. Use --api-key or run 'tracekit init' first")
 		}

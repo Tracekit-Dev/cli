@@ -26,7 +26,7 @@ Example:
 
 func runWebhookList(cmd *cobra.Command, args []string) error {
 	// Load config
-	cfg, err := config.Read()
+	cfg, err := config.ReadWithFallback(EnvFlag)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
