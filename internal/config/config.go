@@ -93,8 +93,11 @@ func RequireAuthForURL(envFlag string, url string) (*Config, error) {
 // ReadWithFallback reads config using the fallback chain:
 // explicit envFlag path > global ~/.tracekitconfig (active profile) > local .env
 func ReadWithFallback(envFlag string) (*Config, error) {
-	// 1. Explicit --env flag path (legacy flat format)
+	// 1. Explicit --env flag: URL (profile lookup) or file path (legacy)
 	if envFlag != "" {
+		if strings.HasPrefix(envFlag, "http://") || strings.HasPrefix(envFlag, "https://") {
+			return RequireAuthForURL("", envFlag)
+		}
 		return readLegacyFromPath(envFlag)
 	}
 

@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/yourusername/context.io/cli/internal/client"
@@ -51,7 +53,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Display config (mask API key)
-	ui.PrintSuccess("Configuration found in .env")
+	configSource := "~/.tracekitconfig"
+	if EnvFlag != "" && !strings.HasPrefix(EnvFlag, "http://") && !strings.HasPrefix(EnvFlag, "https://") {
+		configSource = EnvFlag
+	} else if EnvFlag == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			configSource = ".env"
+		}
+	}
+	ui.PrintSuccess(fmt.Sprintf("Configuration found in %s", configSource))
 	fmt.Println()
 	ui.PrintMuted(fmt.Sprintf("   API Key:      %s", utils.MaskAPIKey(cfg.APIKey)))
 	ui.PrintMuted(fmt.Sprintf("   Endpoint:     %s", cfg.Endpoint))
@@ -81,9 +91,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	ui.PrintSection("🔌 Integration Status")
 	fmt.Println()
 
-	// Determine API URL
+	// Determine API URL from config, with --dev override
+	apiURL := cfg.GetAPIBase()
 	useDev, _ := cmd.Flags().GetBool("dev")
-	apiURL := client.DefaultBaseURL
 	if useDev {
 		apiURL = client.DevBaseURL
 		ui.PrintInfo("Using development API: " + apiURL)
