@@ -97,6 +97,10 @@ type initWizardModel struct {
 	verifyResp *client.VerifyResponse
 
 	// Step 2: Extras (optional -- user can skip all with 's')
+	extrasView      string // "envask", "health", "alerts" -- sub-views within extras step
+	configSaved     bool   // true once we've saved to ~/.tracekitconfig
+	createLocalEnv  bool   // true if user wants a .env in current directory
+	envAskCursor    int    // 0=yes, 1=no
 	healthEndpoints []string
 	healthSelected  []bool
 	healthCursor    int
@@ -104,8 +108,6 @@ type initWizardModel struct {
 	alertSelected   []bool
 	alertCursor     int
 	alertsCreated   int
-	extrasView      string // "health", "alerts" -- sub-views within extras step
-	configSaved     bool   // true once we've saved to ~/.tracekitconfig
 
 	// Step 3: Setup (auto-executing)
 	installSteps   []installStep
@@ -171,10 +173,11 @@ func (m initWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case initConfigSavedMsg:
 		m.configSaved = true
-		// Now go to extras step with health detection
+		// Now go to extras step, start with .env question
 		m.step = 2
-		m.extrasView = "health"
-		return m, m.detectHealthCmd()
+		m.extrasView = "envask"
+		m.envAskCursor = 0
+		return m, nil
 
 	case initHealthDetectedMsg:
 		m.healthEndpoints = msg.endpoints
@@ -256,8 +259,13 @@ func (m initWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			m.code = ""
 			m.step = 0
-		} else if m.step == 2 && m.extrasView == "alerts" {
-			m.extrasView = "health"
+		} else if m.step == 2 {
+			switch m.extrasView {
+			case "alerts":
+				m.extrasView = "health"
+			case "health":
+				m.extrasView = "envask"
+			}
 		}
 		return m, nil
 	}
@@ -345,7 +353,7 @@ func (m initWizardModel) handleExtrasKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	// Skip everything -- jump straight to setup with only test trace
-	if key == "s" {
+	if key == "s" && m.extrasView != "envask" {
 		m.skipExtras = true
 		m.step = 3
 		m.buildInstallSteps()
@@ -353,10 +361,45 @@ func (m initWizardModel) handleExtrasKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.runInstallStepCmd(0), m.spinnerTickCmd())
 	}
 
-	if m.extrasView == "health" {
+	switch m.extrasView {
+	case "envask":
+		return m.handleEnvAskKey(key)
+	case "health":
 		return m.handleHealthKey(key)
+	default:
+		return m.handleAlertsKey(key)
 	}
-	return m.handleAlertsKey(key)
+}
+
+func (m initWizardModel) handleEnvAskKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "enter":
+		m.createLocalEnv = m.envAskCursor == 0
+		if m.createLocalEnv {
+			// Save .env now
+			cfg := &config.Config{
+				APIKey:                m.verifyResp.APIKey,
+				UserID:                m.verifyResp.UserID,
+				Endpoint:              m.apiClient.BaseURL,
+				ServiceName:           m.serviceName,
+				Enabled:               "true",
+				CodeMonitoringEnabled: "true",
+			}
+			config.Save(cfg) // save to .env in current directory
+		}
+		// Move to health detection
+		m.extrasView = "health"
+		return m, m.detectHealthCmd()
+	case "j", "down":
+		if m.envAskCursor < 1 {
+			m.envAskCursor++
+		}
+	case "k", "up":
+		if m.envAskCursor > 0 {
+			m.envAskCursor--
+		}
+	}
+	return m, nil
 }
 
 func (m initWizardModel) handleHealthKey(key string) (tea.Model, tea.Cmd) {
@@ -745,6 +788,23 @@ func (m initWizardModel) renderExtrasStep() string {
 
 	b.WriteString("  " + success.Render("Account verified! Config saved to ~/.tracekitconfig") + "\n\n")
 
+	if m.extrasView == "envask" {
+		b.WriteString("  " + text.Bold(true).Render("Create a local .env file for this project?") + "\n\n")
+
+		options := []string{"Yes -- save config to .env in current directory", "No -- ~/.tracekitconfig is enough"}
+		for i, opt := range options {
+			prefix := "    "
+			style := text
+			if i == m.envAskCursor {
+				prefix = "  > "
+				style = brand.Bold(true)
+			}
+			b.WriteString(prefix + style.Render(opt) + "\n")
+		}
+		b.WriteString("\n  " + dim.Render("j/k select  enter confirm"))
+		return b.String()
+	}
+
 	if m.extrasView == "health" {
 		b.WriteString("  " + text.Bold(true).Render("Health Check Endpoints") + "\n\n")
 
@@ -839,7 +899,11 @@ func (m initWizardModel) renderCompleteStep() string {
 
 	b.WriteString("  " + success.Bold(true).Render("Setup Complete!") + "\n\n")
 
-	b.WriteString("  " + dim.Render("Config:     ") + text.Render("~/.tracekitconfig") + "\n")
+	configInfo := "~/.tracekitconfig"
+	if m.createLocalEnv {
+		configInfo += " + .env"
+	}
+	b.WriteString("  " + dim.Render("Config:     ") + text.Render(configInfo) + "\n")
 
 	if m.framework != nil && m.framework.Name != "generic" {
 		b.WriteString("  " + dim.Render("Framework:  ") + text.Render(m.framework.Name+" ("+m.framework.Type+")") + "\n")
