@@ -104,11 +104,14 @@ type initWizardModel struct {
 	alertCursor     int
 	alertsCreated   int
 
-	// Step 4: Install
-	installSteps   []installStep
-	installCurrent int
-	installDone    bool
-	spinnerFrame   int
+	// Step 4: Install (pre-install config choice + install steps)
+	configChoosing    bool // true when showing config location choice
+	configChoiceCursor int  // 0=local .env, 1=global ~/.tracekitconfig
+	useGlobalConfig   bool // true if user chose global config
+	installSteps      []installStep
+	installCurrent    int
+	installDone       bool
+	spinnerFrame      int
 
 	// Step 5: Complete
 	dashboardURL string
@@ -171,14 +174,10 @@ func (m initWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case initAlertsCreatedMsg:
 		m.alertsCreated = msg.count
 		m.step = 4
-		// Initialize install steps and start install
-		m.installSteps = []installStep{
-			{label: "Saving configuration"},
-			{label: "Sending test trace"},
-			{label: "Installing SDK"},
-		}
-		m.installCurrent = 0
-		return m, tea.Batch(m.runInstallStepCmd(0), m.spinnerTickCmd())
+		// Show config location choice before starting install
+		m.configChoosing = true
+		m.configChoiceCursor = 0
+		return m, nil
 
 	case initInstallStepDoneMsg:
 		if msg.index >= 0 && msg.index < len(m.installSteps) {
@@ -249,6 +248,9 @@ func (m initWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case 3:
 		return m.handleAlertsKey(msg)
 	case 4:
+		if m.configChoosing {
+			return m.handleConfigChoiceKey(msg)
+		}
 		// Install step is auto-executing, no key handling
 		return m, nil
 	case 5:
@@ -364,6 +366,38 @@ func (m initWizardModel) handleAlertsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		if len(m.alertSelected) > 0 && m.alertCursor < len(m.alertSelected) {
 			m.alertSelected[m.alertCursor] = !m.alertSelected[m.alertCursor]
+		}
+	}
+
+	return m, nil
+}
+
+func (m initWizardModel) handleConfigChoiceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "enter":
+		// Confirm choice and start install
+		m.useGlobalConfig = m.configChoiceCursor == 1
+		m.configChoosing = false
+		configLabel := "Saving configuration to .env"
+		if m.useGlobalConfig {
+			configLabel = "Saving configuration to ~/.tracekitconfig"
+		}
+		m.installSteps = []installStep{
+			{label: configLabel},
+			{label: "Sending test trace"},
+			{label: "Installing SDK"},
+		}
+		m.installCurrent = 0
+		return m, tea.Batch(m.runInstallStepCmd(0), m.spinnerTickCmd())
+	case "j", "down":
+		if m.configChoiceCursor < 1 {
+			m.configChoiceCursor++
+		}
+	case "k", "up":
+		if m.configChoiceCursor > 0 {
+			m.configChoiceCursor--
 		}
 	}
 
@@ -515,7 +549,7 @@ func (m initWizardModel) runInstallStepCmd(index int) tea.Cmd {
 	return func() tea.Msg {
 		switch index {
 		case 0:
-			// Save configuration
+			// Save configuration to chosen location
 			cfg := &config.Config{
 				APIKey:                m.verifyResp.APIKey,
 				Endpoint:              m.apiClient.BaseURL,
@@ -523,7 +557,11 @@ func (m initWizardModel) runInstallStepCmd(index int) tea.Cmd {
 				Enabled:               "true",
 				CodeMonitoringEnabled: "true",
 			}
-			err := config.Save(cfg)
+			var savePath string
+			if m.useGlobalConfig {
+				savePath = config.GlobalConfigPath()
+			}
+			err := config.Save(cfg, savePath)
 			return initInstallStepDoneMsg{index: 0, err: err}
 
 		case 1:
@@ -615,7 +653,7 @@ func (m initWizardModel) View() string {
 	if m.step < 5 && m.step != 4 {
 		footer := lipgloss.NewStyle().Foreground(cDim).Render(" Esc back | Ctrl+C quit")
 		b.WriteString(footer)
-	} else if m.step == 4 {
+	} else if m.step == 4 && !m.configChoosing {
 		footer := lipgloss.NewStyle().Foreground(cDim).Render(" Installing... | Ctrl+C quit")
 		b.WriteString(footer)
 	}
@@ -747,6 +785,38 @@ func (m initWizardModel) renderAlertsStep() string {
 func (m initWizardModel) renderInstallStep() string {
 	var b strings.Builder
 
+	// Show config location choice before install
+	if m.configChoosing {
+		b.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Padding(0, 2).Render("Where should TraceKit save configuration?"))
+		b.WriteString("\n\n")
+
+		options := []struct {
+			label string
+			desc  string
+		}{
+			{label: ".env (current directory)", desc: "Best for project-specific config"},
+			{label: "~/.tracekitconfig (global)", desc: "Shared across all projects"},
+		}
+
+		for i, opt := range options {
+			prefix := "  "
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Padding(0, 2)
+			if i == m.configChoiceCursor {
+				prefix = "> "
+				style = style.Foreground(cBrand).Bold(true)
+			}
+
+			b.WriteString(style.Render(fmt.Sprintf("%s%s", prefix, opt.label)))
+			b.WriteString("\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 6).Render(opt.desc))
+			b.WriteString("\n")
+		}
+
+		b.WriteString("\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render("j/k navigate | enter confirm"))
+		return b.String()
+	}
+
 	b.WriteString(lipgloss.NewStyle().Foreground(cText).Bold(true).Padding(0, 2).Render("Setting up your project..."))
 	b.WriteString("\n\n")
 
@@ -793,6 +863,15 @@ func (m initWizardModel) renderCompleteStep() string {
 
 	dimLabel := lipgloss.NewStyle().Foreground(cDim)
 	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+
+	// Config location
+	configLoc := ".env"
+	if m.useGlobalConfig {
+		configLoc = "~/.tracekitconfig"
+	}
+	b.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(
+		dimLabel.Render("Config:     ") + valStyle.Render(configLoc)))
+	b.WriteString("\n")
 
 	// Framework
 	if m.framework != nil && m.framework.Name != "generic" {
