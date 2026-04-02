@@ -42,15 +42,11 @@ type chatConvCreatedMsg struct {
 	convID string
 }
 
-type chatStreamStartMsg struct{}
-
 type chatTokenMsg struct {
 	token string
 }
 
-type chatStreamDoneMsg struct {
-	fullText string
-}
+type chatStreamDoneMsg struct{}
 
 type chatErrMsg struct {
 	err error
@@ -64,24 +60,24 @@ type chatMessage struct {
 	rendered string // glamour-rendered markdown (for assistant messages)
 }
 
+// askProgram is a shared pointer so goroutines can Send() to the program.
+// Set after tea.NewProgram() is created but before Run().
+var askProgram *tea.Program
+
 type askModel struct {
-	apiClient      *client.Client
-	width          int
-	height         int
-	quitting       bool
-	nav            navModel
-	navTarget      string
+	apiClient *client.Client
+	width     int
+	height    int
+	quitting  bool
+	nav       navModel
+	navTarget string
 
 	// Conversation state
-	convID         string
-	messages       []chatMessage
-	input          string
-	streaming      bool
-	streamBuffer   strings.Builder
-	err            error
-
-	// Scroll
-	scrollOffset   int
+	convID   string
+	messages []chatMessage
+	input    string
+	streaming bool
+	err      error
 }
 
 func (m askModel) Init() tea.Cmd {
@@ -108,21 +104,17 @@ func (m askModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input = ""
 			m.messages = append(m.messages, chatMessage{role: "user", content: question})
 			m.streaming = true
-			m.streamBuffer.Reset()
-			return m, m.sendMessageCmd(question)
+			m.messages = append(m.messages, chatMessage{role: "assistant", content: ""})
+			go m.streamResponse(question)
+			return m, nil
 		}
 		return m, nil
 
 	case chatTokenMsg:
-		m.streamBuffer.WriteString(msg.token)
-		// Update the last assistant message in-place
+		// Append token to the last assistant message
 		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "assistant" {
-			m.messages[len(m.messages)-1].content = m.streamBuffer.String()
-		} else {
-			m.messages = append(m.messages, chatMessage{role: "assistant", content: m.streamBuffer.String()})
+			m.messages[len(m.messages)-1].content += msg.token
 		}
-		// Auto-scroll to bottom
-		m.scrollOffset = 0
 		return m, nil
 
 	case chatStreamDoneMsg:
@@ -162,20 +154,14 @@ func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "esc":
-		if m.streaming {
-			return m, nil // can't cancel mid-stream
+		if !m.streaming {
+			m.quitting = true
+			return m, tea.Quit
 		}
-		m.quitting = true
-		return m, tea.Quit
-	}
-
-	// Don't accept input while streaming
-	if m.streaming {
 		return m, nil
 	}
 
-	// Don't accept input until conversation is created
-	if m.convID == "" {
+	if m.streaming || m.convID == "" {
 		return m, nil
 	}
 
@@ -189,18 +175,12 @@ func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.messages = append(m.messages, chatMessage{role: "user", content: question})
 		m.streaming = true
-		m.streamBuffer.Reset()
-		m.scrollOffset = 0
-		return m, m.sendMessageCmd(question)
+		m.messages = append(m.messages, chatMessage{role: "assistant", content: ""})
+		go m.streamResponse(question)
+		return m, nil
 	case "backspace":
 		if len(m.input) > 0 {
 			m.input = m.input[:len(m.input)-1]
-		}
-	case "up":
-		m.scrollOffset++
-	case "down":
-		if m.scrollOffset > 0 {
-			m.scrollOffset--
 		}
 	default:
 		if len(key) == 1 {
@@ -213,6 +193,60 @@ func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// streamResponse runs in a goroutine, sends tokens via askProgram.Send()
+func (m askModel) streamResponse(content string) {
+	resp, err := m.apiClient.SendChatMessage(context.Background(), m.convID, content)
+	if err != nil {
+		askProgram.Send(chatErrMsg{err: err})
+		return
+	}
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	var eventType string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimPrefix(line, "event: ")
+			continue
+		}
+
+		if strings.HasPrefix(line, "data: ") {
+			dataLine := strings.TrimPrefix(line, "data: ")
+
+			switch eventType {
+			case "text":
+				var token string
+				if err := json.Unmarshal([]byte(dataLine), &token); err != nil {
+					token = dataLine
+				}
+				askProgram.Send(chatTokenMsg{token: token})
+
+			case "error":
+				var errData map[string]string
+				if err := json.Unmarshal([]byte(dataLine), &errData); err == nil {
+					if msg := errData["message"]; msg != "" {
+						askProgram.Send(chatErrMsg{err: fmt.Errorf(msg)})
+						return
+					}
+				}
+				askProgram.Send(chatErrMsg{err: fmt.Errorf(dataLine)})
+				return
+
+			case "done":
+				askProgram.Send(chatStreamDoneMsg{})
+				return
+			}
+			eventType = ""
+		}
+	}
+
+	// Stream ended without done event
+	askProgram.Send(chatStreamDoneMsg{})
+}
+
 // -- Commands --
 
 func (m askModel) createConversationCmd() tea.Cmd {
@@ -222,60 +256,6 @@ func (m askModel) createConversationCmd() tea.Cmd {
 			return chatErrMsg{err: err}
 		}
 		return chatConvCreatedMsg{convID: convID}
-	}
-}
-
-func (m askModel) sendMessageCmd(content string) tea.Cmd {
-	return func() tea.Msg {
-		resp, err := m.apiClient.SendChatMessage(context.Background(), m.convID, content)
-		if err != nil {
-			return chatErrMsg{err: err}
-		}
-
-		// Parse SSE stream in a goroutine -- send tokens via Program
-		// But since Bubbletea doesn't support channel-based streaming easily,
-		// we'll collect the full response and send it as one message.
-		// For perceived speed, we stream token-by-token via a sub-command loop.
-		defer resp.Body.Close()
-
-		scanner := bufio.NewScanner(resp.Body)
-		var eventType string
-		var fullText strings.Builder
-
-		for scanner.Scan() {
-			line := scanner.Text()
-
-			if strings.HasPrefix(line, "event: ") {
-				eventType = strings.TrimPrefix(line, "event: ")
-				continue
-			}
-
-			if strings.HasPrefix(line, "data: ") {
-				dataLine := strings.TrimPrefix(line, "data: ")
-
-				switch eventType {
-				case "text":
-					var token string
-					if err := json.Unmarshal([]byte(dataLine), &token); err != nil {
-						token = dataLine
-					}
-					fullText.WriteString(token)
-				case "error":
-					var errData map[string]string
-					if err := json.Unmarshal([]byte(dataLine), &errData); err == nil {
-						if msg := errData["message"]; msg != "" {
-							return chatErrMsg{err: fmt.Errorf(msg)}
-						}
-					}
-					return chatErrMsg{err: fmt.Errorf(dataLine)}
-				case "done":
-					return chatStreamDoneMsg{fullText: fullText.String()}
-				}
-				eventType = ""
-			}
-		}
-
-		return chatStreamDoneMsg{fullText: fullText.String()}
 	}
 }
 
@@ -313,7 +293,7 @@ func (m askModel) View() string {
 		header += dim.Render("  (connecting...)")
 	}
 	b.WriteString("\n" + header + "\n")
-	b.WriteString("  " + dim.Render(strings.Repeat("-", min(w-4, 70))) + "\n")
+	b.WriteString("  " + dim.Render(strings.Repeat("-", askMin(w-4, 70))) + "\n")
 
 	// Messages area
 	if len(m.messages) == 0 && !m.streaming && m.err == nil {
@@ -334,12 +314,10 @@ func (m askModel) View() string {
 		} else {
 			b.WriteString("  " + assistantStyle.Render("Copilot:") + "\n")
 			if msg.rendered != "" {
-				// Use glamour-rendered output
 				for _, line := range strings.Split(msg.rendered, "\n") {
 					b.WriteString("  " + line + "\n")
 				}
-			} else {
-				// Still streaming -- show raw text
+			} else if msg.content != "" {
 				content := msg.content
 				if m.streaming {
 					content += lipgloss.NewStyle().Foreground(brand).Render("_")
@@ -347,6 +325,8 @@ func (m askModel) View() string {
 				for _, line := range strings.Split(content, "\n") {
 					b.WriteString("  " + text.Render(line) + "\n")
 				}
+			} else if m.streaming {
+				b.WriteString("  " + dim.Render("Thinking...") + "\n")
 			}
 		}
 	}
@@ -359,7 +339,7 @@ func (m askModel) View() string {
 
 	// Input bar
 	b.WriteString("\n")
-	b.WriteString("  " + dim.Render(strings.Repeat("-", min(w-4, 70))) + "\n")
+	b.WriteString("  " + dim.Render(strings.Repeat("-", askMin(w-4, 70))) + "\n")
 
 	if m.streaming {
 		b.WriteString("  " + dim.Render("Streaming response...") + "\n")
@@ -378,7 +358,7 @@ func (m askModel) View() string {
 	return m.appendNavOverlay(b.String())
 }
 
-func min(a, b int) int {
+func askMin(a, b int) int {
 	if a < b {
 		return a
 	}
@@ -400,7 +380,6 @@ func renderChatMarkdown(text string) (string, error) {
 		return "", err
 	}
 
-	// Colorize 32-char hex trace IDs
 	traceIDRe := regexp.MustCompile(`\b([a-f0-9]{32})\b`)
 	traceStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#06b6d4"))
 	out = traceIDRe.ReplaceAllStringFunc(out, func(id string) string {
@@ -423,13 +402,15 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		nav:       newNavModel("ask"),
 	}
 
-	// Pre-fill first question if provided as argument
 	if len(args) > 0 {
 		model.input = args[0]
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
+	askProgram = p
+
 	result, err := p.Run()
+	askProgram = nil
 	if err != nil {
 		return fmt.Errorf("chat error: %w", err)
 	}
