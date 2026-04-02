@@ -171,16 +171,17 @@ func NavHint() string {
 
 // RunNavTarget launches the selected command. Call this after the TUI exits with NavSwitchMsg.
 func RunNavTarget(command string) error {
-	switch command {
-	case "dashboard":
-		return rootCmd.Root().RunE(rootCmd, []string{})
-	default:
-		// Find and execute the subcommand
-		for _, cmd := range rootCmd.Commands() {
-			if cmd.Name() == command {
+	for _, cmd := range rootCmd.Commands() {
+		if cmd.Name() == command {
+			if cmd.RunE != nil {
 				return cmd.RunE(cmd, []string{})
 			}
+			if cmd.Run != nil {
+				cmd.Run(cmd, []string{})
+				return nil
+			}
+			return fmt.Errorf("command %s has no runner", command)
 		}
-		return fmt.Errorf("unknown command: %s", command)
 	}
+	return fmt.Errorf("unknown command: %s", command)
 }
