@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -73,11 +74,12 @@ type askModel struct {
 	navTarget string
 
 	// Conversation state
-	convID   string
-	messages []chatMessage
-	input    string
-	streaming bool
-	err      error
+	convID      string
+	messages    []chatMessage
+	input       string
+	streaming   bool
+	err         error
+	authExpired bool
 }
 
 func (m askModel) Init() tea.Cmd {
@@ -131,6 +133,10 @@ func (m askModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case chatErrMsg:
+		if errors.Is(msg.err, client.ErrUnauthorized) {
+			m.authExpired = true
+			return m, tea.Quit
+		}
 		m.streaming = false
 		m.err = msg.err
 		return m, nil
@@ -414,6 +420,10 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	if m, ok := result.(askModel); ok && m.navTarget != "" {
 		return RunNavTarget(m.navTarget)
+	}
+	if m, ok := result.(askModel); ok && m.authExpired {
+		HandleUnauthorized(client.ErrUnauthorized, m.apiClient.BaseURL)
+		return nil
 	}
 
 	return nil

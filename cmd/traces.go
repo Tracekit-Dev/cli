@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -110,8 +111,9 @@ type tracesModel struct {
 	err        error
 	loading    bool
 	quitting   bool
-	nav        navModel
-	navTarget  string
+	nav         navModel
+	navTarget   string
+	authExpired bool
 
 	// Filter state
 	filterService    string
@@ -177,6 +179,10 @@ func (m tracesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tracesErrMsg:
+		if errors.Is(msg.err, client.ErrUnauthorized) {
+			m.authExpired = true
+			return m, tea.Quit
+		}
 		m.loading = false
 		m.detailLoading = false
 		m.err = msg.err
@@ -1056,6 +1062,10 @@ func runTraces(cmd *cobra.Command, args []string) error {
 	// Check if user wants to switch to another command
 	if m, ok := result.(tracesModel); ok && m.navTarget != "" {
 		return RunNavTarget(m.navTarget)
+	}
+	if m, ok := result.(tracesModel); ok && m.authExpired {
+		HandleUnauthorized(client.ErrUnauthorized, m.client.BaseURL)
+		return nil
 	}
 	return nil
 }

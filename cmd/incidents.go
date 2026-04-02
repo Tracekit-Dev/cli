@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -127,11 +128,12 @@ type incidentsModel struct {
 	items      []client.CLITriageItem
 	cursor     int
 	totalCount int
-	loading    bool
-	err        error
-	quitting   bool
-	nav        navModel
-	navTarget  string
+	loading     bool
+	err         error
+	quitting    bool
+	authExpired bool
+	nav         navModel
+	navTarget   string
 
 	// View state: "list", "resolve", "snooze"
 	view string
@@ -193,6 +195,10 @@ func (m incidentsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case incidentTransitionErrMsg:
+		if errors.Is(msg.err, client.ErrUnauthorized) {
+			m.authExpired = true
+			return m, tea.Quit
+		}
 		m.loading = false
 		m.err = msg.err
 		return m, nil
@@ -876,6 +882,10 @@ func runIncidents(cmd *cobra.Command, args []string) error {
 	// Check if user wants to switch to another command
 	if m, ok := result.(incidentsModel); ok && m.navTarget != "" {
 		return RunNavTarget(m.navTarget)
+	}
+	if m, ok := result.(incidentsModel); ok && m.authExpired {
+		HandleUnauthorized(client.ErrUnauthorized, m.client.BaseURL)
+		return nil
 	}
 	return nil
 }

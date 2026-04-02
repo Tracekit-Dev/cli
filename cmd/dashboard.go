@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -53,16 +54,17 @@ var (
 // -- Bubbletea Model --
 
 type dashModel struct {
-	client    *client.Client
-	data      *client.DashboardData
-	err       error
-	width     int
-	height    int
-	lastFetch time.Time
-	quitting  bool
-	window    string // "1h", "6h", "24h"
-	nav       navModel
-	navTarget string // set when user picks a nav target
+	client      *client.Client
+	data        *client.DashboardData
+	err         error
+	width       int
+	height      int
+	lastFetch   time.Time
+	quitting    bool
+	window      string // "1h", "6h", "24h"
+	nav         navModel
+	navTarget   string // set when user picks a nav target
+	authExpired bool
 }
 
 type tickMsg time.Time
@@ -119,6 +121,10 @@ func (m dashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataMsg:
 		m.lastFetch = time.Now()
 		if msg.err != nil {
+			if errors.Is(msg.err, client.ErrUnauthorized) {
+				m.authExpired = true
+				return m, tea.Quit
+			}
 			m.err = msg.err
 		} else {
 			m.data = msg.data
@@ -780,6 +786,10 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	// Check if user wants to switch to another command
 	if m, ok := result.(dashModel); ok && m.navTarget != "" {
 		return RunNavTarget(m.navTarget)
+	}
+	if m, ok := result.(dashModel); ok && m.authExpired {
+		HandleUnauthorized(client.ErrUnauthorized, m.client.BaseURL)
+		return nil
 	}
 	return nil
 }

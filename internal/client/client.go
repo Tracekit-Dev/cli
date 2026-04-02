@@ -84,9 +84,29 @@ type VerifyResponse struct {
 	DashboardURL   string `json:"dashboard_url"`
 }
 
+// ErrUnauthorized is returned when the API responds with 401
+var ErrUnauthorized = fmt.Errorf("unauthorized: API key is invalid or expired")
+
 // ErrorResponse represents API error response
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// apiError returns ErrUnauthorized for 401 status codes, otherwise a generic API error
+func apiError(statusCode int, body string) error {
+	if statusCode == http.StatusUnauthorized {
+		return ErrUnauthorized
+	}
+	return fmt.Errorf("API error (%d): %s", statusCode, body)
+}
+
+// apiErrorParsed tries to parse the error response body, then delegates to apiError
+func apiErrorParsed(statusCode int, body []byte) error {
+	var errResp ErrorResponse
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+		return apiError(statusCode, errResp.Error)
+	}
+	return apiError(statusCode, string(body))
 }
 
 // Register creates a new account and sends verification code
@@ -118,11 +138,7 @@ func (c *Client) Register(req *RegisterRequest) (*RegisterResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var registerResp RegisterResponse
@@ -159,11 +175,7 @@ func (c *Client) Verify(req *VerifyRequest) (*VerifyResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var verifyResp VerifyResponse
@@ -199,11 +211,7 @@ func (c *Client) GetStatus() (map[string]interface{}, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var status map[string]interface{}
@@ -307,11 +315,7 @@ func (c *Client) CreateRelease(req *CreateReleaseRequest) (*CreateReleaseRespons
 		}
 		return &release, false, nil
 	default:
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, false, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, false, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, false, apiErrorParsed(resp.StatusCode, respBody)
 	}
 }
 
@@ -341,11 +345,7 @@ func (c *Client) FinalizeRelease(version, service string) (*CreateReleaseRespons
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var release CreateReleaseResponse
@@ -387,11 +387,7 @@ func (c *Client) CreateDeploy(version, service string, req *CreateDeployRequest)
 	}
 
 	if resp.StatusCode != http.StatusCreated {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var deploy CreateDeployResponse
@@ -428,11 +424,7 @@ func (c *Client) ListReleases(page, pageSize int, service string) (*ReleaseListR
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var listResp ReleaseListResponse
@@ -529,7 +521,7 @@ func (c *Client) GetDashboard(window string) (*DashboardData, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var data DashboardData
@@ -566,11 +558,7 @@ func (c *Client) PostHealthCheck(apiURL, apiKey string, requestBody map[string]i
 	}
 
 	if resp.StatusCode != http.StatusCreated {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	return nil
@@ -651,11 +639,7 @@ func (c *Client) UploadSourceMap(debugID, release, filename string, mapData []by
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var uploadResp SourceMapUploadResponse
@@ -689,11 +673,7 @@ func (c *Client) DeleteSourceMaps(release string) (*SourceMapDeleteResponse, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, errResp.Error)
-		}
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+		return nil, apiErrorParsed(resp.StatusCode, respBody)
 	}
 
 	var deleteResp SourceMapDeleteResponse
@@ -866,7 +846,7 @@ func (c *Client) GetTraces(service string, hasError bool, minDurationMs int, tim
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var data TraceListResponse
@@ -900,7 +880,7 @@ func (c *Client) GetTrace(traceID string) (*TraceDetailResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var data TraceDetailResponse
@@ -1035,7 +1015,7 @@ func (c *Client) GetServices() (*ServiceListResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var data ServiceListResponse
@@ -1069,7 +1049,7 @@ func (c *Client) GetServicesWithHealth() (*ServiceHealthListResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var data ServiceHealthListResponse
@@ -1103,7 +1083,7 @@ func (c *Client) GetServiceDetail(serviceName string) (*CLIServiceDetail, error)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var data CLIServiceDetail
@@ -1137,7 +1117,7 @@ func (c *Client) GetServiceErrors(serviceName string) (*ServiceErrorsResponse, e
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var data ServiceErrorsResponse
@@ -1244,7 +1224,7 @@ func (c *Client) GetAlertRules() (*AlertRulesResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var result AlertRulesResponse
@@ -1284,7 +1264,7 @@ func (c *Client) CreateAlertRule(req CreateAlertRuleRequest) (*CLIAlertRule, err
 	}
 
 	if resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var rule CLIAlertRule
@@ -1318,7 +1298,7 @@ func (c *Client) DeleteAlertRule(ruleID string) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiError(resp.StatusCode, string(respBody))
 	}
 
 	return nil
@@ -1354,7 +1334,7 @@ func (c *Client) ToggleAlertRule(ruleID string, enabled bool) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiError(resp.StatusCode, string(respBody))
 	}
 
 	return nil
@@ -1384,7 +1364,7 @@ func (c *Client) GetAlertHistory(ruleID string) (*AlertHistoryResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var result AlertHistoryResponse
@@ -1418,7 +1398,7 @@ func (c *Client) GetChannels() (*ChannelsResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var result ChannelsResponse
@@ -1499,7 +1479,7 @@ func (c *Client) GetTriageInbox(severity, entityType, status, team string) (*Tri
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiError(resp.StatusCode, string(respBody))
 	}
 
 	var result TriageInboxResponse
@@ -1539,7 +1519,7 @@ func (c *Client) AcknowledgeIncident(itemID, entityType string) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiError(resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -1574,7 +1554,7 @@ func (c *Client) InvestigateIncident(itemID, entityType string) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiError(resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -1609,7 +1589,7 @@ func (c *Client) ResolveIncident(itemID, entityType, note string) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiError(resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -1644,7 +1624,7 @@ func (c *Client) SnoozeIncident(itemID, entityType, duration string) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiError(resp.StatusCode, string(respBody))
 	}
 	return nil
 }

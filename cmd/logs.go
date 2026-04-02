@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -83,6 +84,7 @@ type logsModel struct {
 	cancel      context.CancelFunc
 	traceCount  int
 	quitting    bool
+	authExpired bool
 	nav         navModel
 	navTarget   string
 }
@@ -143,6 +145,11 @@ func (m logsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listenForTraces(m.tracesCh, m.errCh)
 
 	case streamErrorMsg:
+		if errors.Is(msg.err, client.ErrUnauthorized) {
+			m.authExpired = true
+			m.cancel()
+			return m, tea.Quit
+		}
 		m.err = msg.err
 		m.connected = false
 		return m, nil
@@ -412,6 +419,10 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	// Check if user wants to switch to another command
 	if m, ok := result.(logsModel); ok && m.navTarget != "" {
 		return RunNavTarget(m.navTarget)
+	}
+	if m, ok := result.(logsModel); ok && m.authExpired {
+		HandleUnauthorized(client.ErrUnauthorized, m.client.BaseURL)
+		return nil
 	}
 	return nil
 }

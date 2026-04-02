@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -95,9 +96,10 @@ type servicesModel struct {
 	// Service list
 	services []client.CLIServiceHealth
 	cursor   int
-	loading  bool
-	err      error
-	quitting bool
+	loading     bool
+	err         error
+	quitting    bool
+	authExpired bool
 
 	// Detail view
 	view        string // "list" | "detail"
@@ -146,6 +148,10 @@ func (m servicesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case svcErrMsg:
+		if errors.Is(msg.err, client.ErrUnauthorized) {
+			m.authExpired = true
+			return m, tea.Quit
+		}
 		m.loading = false
 		m.err = msg.err
 		return m, nil
@@ -590,6 +596,10 @@ func runServices(cmd *cobra.Command, args []string) error {
 	// Check if user wants to switch to another command
 	if m, ok := result.(servicesModel); ok && m.navTarget != "" {
 		return RunNavTarget(m.navTarget)
+	}
+	if m, ok := result.(servicesModel); ok && m.authExpired {
+		HandleUnauthorized(client.ErrUnauthorized, m.apiClient.BaseURL)
+		return nil
 	}
 	return nil
 }

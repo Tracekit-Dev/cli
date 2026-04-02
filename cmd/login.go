@@ -57,6 +57,10 @@ type loginWizardModel struct {
 	// Flags
 	apiURL string
 	useDev bool
+
+	// Navigation
+	nav       navModel
+	navTarget string
 }
 
 var loginSteps = []string{"Email", "Verify", "Complete"}
@@ -95,6 +99,11 @@ func (m loginWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		return m, nil
 
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -116,6 +125,15 @@ func (m loginWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.step = 0
 		}
 		return m, nil
+	}
+
+	// Nav overlay gets first crack at keys on complete step
+	if m.step == 2 {
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
 	}
 
 	switch m.step {
@@ -311,11 +329,17 @@ func (m loginWizardModel) View() string {
 	if m.step < 2 {
 		b.WriteString(" " + footer.Render("enter submit  esc back  ctrl+c quit"))
 	} else {
-		b.WriteString(" " + footer.Render("enter/q quit"))
+		b.WriteString(" " + footer.Render("enter/q quit") + "  " + NavHint())
 	}
 	b.WriteString("\n")
 
-	return b.String()
+	content := b.String()
+	if m.step == 2 {
+		if overlay := m.nav.ViewNav(m.width); overlay != "" {
+			content += "\n" + overlay + "\n"
+		}
+	}
+	return content
 }
 
 func renderLoginSteps(current int, w int) string {
@@ -452,8 +476,14 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	result, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("login error: %w", err)
+	}
+
+	// Check if user wants to switch to another command
+	if m, ok := result.(loginWizardModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
 	}
 
 	return nil

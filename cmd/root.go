@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -34,6 +35,33 @@ Examples:
 // Execute runs the root command
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// HandleUnauthorized checks if an error is a 401 and launches the login flow.
+// Accepts the base URL from the original command so login targets the same server.
+// Returns true if the error was handled (login was launched).
+func HandleUnauthorized(err error, baseURL string) bool {
+	if err != nil && errors.Is(err, client.ErrUnauthorized) {
+		fmt.Println("\nYour API key is invalid or expired. Please log in again.\n")
+		loginCmd := findLoginCmd()
+		if loginCmd != nil && loginCmd.RunE != nil {
+			if baseURL != "" && baseURL != client.DefaultBaseURL {
+				_ = loginCmd.Flags().Set("api-url", baseURL)
+			}
+			_ = loginCmd.RunE(loginCmd, []string{})
+		}
+		return true
+	}
+	return false
+}
+
+func findLoginCmd() *cobra.Command {
+	for _, cmd := range rootCmd.Commands() {
+		if cmd.Name() == "login" {
+			return cmd
+		}
+	}
+	return nil
 }
 
 // NewAuthenticatedClient creates an API client from stored credentials.

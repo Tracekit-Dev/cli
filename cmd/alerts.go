@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -172,7 +173,8 @@ type alertsModel struct {
 	wizardErr       string
 
 	// Status message (flash)
-	statusMsg string
+	statusMsg   string
+	authExpired bool
 }
 
 func (m alertsModel) Init() tea.Cmd {
@@ -234,6 +236,10 @@ func (m alertsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case alertErrMsg:
+		if errors.Is(msg.err, client.ErrUnauthorized) {
+			m.authExpired = true
+			return m, tea.Quit
+		}
 		m.loading = false
 		m.err = msg.err
 		return m, nil
@@ -1093,6 +1099,10 @@ func runAlerts(cmd *cobra.Command, args []string) error {
 	// Check if user wants to switch to another command
 	if m, ok := result.(alertsModel); ok && m.navTarget != "" {
 		return RunNavTarget(m.navTarget)
+	}
+	if m, ok := result.(alertsModel); ok && m.authExpired {
+		HandleUnauthorized(client.ErrUnauthorized, m.apiClient.BaseURL)
+		return nil
 	}
 	return nil
 }
