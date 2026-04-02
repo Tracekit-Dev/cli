@@ -270,12 +270,20 @@ func (m loginWizardModel) View() string {
 		w = 80
 	}
 
-	// Title
-	title := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6366f1")).
-		Bold(true).
-		Render("TraceKit Login")
-	b.WriteString("\n " + title + "\n\n")
+	// ASCII banner
+	brand := lipgloss.Color("#6366f1")
+	logo := lipgloss.NewStyle().Foreground(brand).Bold(true).Render(
+		"  ████████╗██████╗  █████╗  ██████╗███████╗██╗  ██╗██╗████████╗\n" +
+			"  ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝██║ ██╔╝██║╚══██╔══╝\n" +
+			"     ██║   ██████╔╝███████║██║     █████╗  █████╔╝ ██║   ██║\n" +
+			"     ██║   ██╔══██╗██╔══██║██║     ██╔══╝  ██╔═██╗ ██║   ██║\n" +
+			"     ██║   ██║  ██║██║  ██║╚██████╗███████╗██║  ██╗██║   ██║\n" +
+			"     ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝")
+	tagline := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#818cf8")).
+		Italic(true).
+		Render("        Zero-friction APM for modern applications")
+	b.WriteString("\n" + logo + "\n\n" + tagline + "\n\n")
 
 	// Step indicator
 	b.WriteString(" " + renderLoginSteps(m.step, w) + "\n\n")
