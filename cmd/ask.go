@@ -147,13 +147,11 @@ func (m askModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-
-	switch key {
-	case "ctrl+c":
+	switch msg.Type {
+	case tea.KeyCtrlC:
 		m.quitting = true
 		return m, tea.Quit
-	case "esc":
+	case tea.KeyEscape:
 		if !m.streaming {
 			m.quitting = true
 			return m, tea.Quit
@@ -165,8 +163,8 @@ func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch {
-	case key == "enter":
+	switch msg.Type {
+	case tea.KeyEnter:
 		question := strings.TrimSpace(m.input)
 		if question == "" {
 			return m, nil
@@ -178,14 +176,14 @@ func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{role: "assistant", content: ""})
 		go m.streamResponse(question)
 		return m, nil
-	case key == "backspace":
+	case tea.KeyBackspace:
 		if len(m.input) > 0 {
 			m.input = m.input[:len(m.input)-1]
 		}
-	case key == "space":
+	case tea.KeySpace:
 		m.input += " "
-	case msg.Type == tea.KeyRunes:
-		m.input += msg.String()
+	case tea.KeyRunes:
+		m.input += string(msg.Runes)
 	}
 
 	return m, nil
