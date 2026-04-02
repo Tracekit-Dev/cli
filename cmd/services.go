@@ -261,10 +261,16 @@ func (m servicesModel) View() string {
 			return "\n" + lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading service details...") + "\n"
 		}
 		if m.detail != nil {
+			var content string
 			if m.detailTab == "errors" {
-				return m.renderErrorsTab(w)
+				content = m.renderErrorsTab(w)
+			} else {
+				content = m.renderMetricsTab(w)
 			}
-			return m.renderMetricsTab(w)
+			if overlay := m.nav.ViewNav(w); overlay != "" {
+				content += "\n" + overlay + "\n"
+			}
+			return content
 		}
 	}
 

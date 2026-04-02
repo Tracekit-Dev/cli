@@ -393,7 +393,11 @@ func (m tracesModel) View() string {
 
 	// Detail view
 	if m.selectedTraceID != "" && m.detailTrace != nil {
-		return m.renderDetailView()
+		content := m.renderDetailView()
+		if overlay := m.nav.ViewNav(m.width); overlay != "" {
+			content += "\n" + overlay + "\n"
+		}
+		return content
 	}
 
 	var b strings.Builder

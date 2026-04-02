@@ -557,16 +557,22 @@ func (m alertsModel) View() string {
 		w = 100
 	}
 
+	var content string
 	switch m.view {
 	case "history":
-		return m.renderHistoryView(w)
+		content = m.renderHistoryView(w)
 	case "create":
-		return m.renderCreateView(w)
+		content = m.renderCreateView(w)
 	case "confirm-delete":
-		return m.renderDeleteView(w)
+		content = m.renderDeleteView(w)
 	default:
-		return m.renderAlertListView(w)
+		content = m.renderAlertListView(w)
 	}
+
+	if overlay := m.nav.ViewNav(w); overlay != "" {
+		content += "\n" + overlay + "\n"
+	}
+	return content
 }
 
 // -- List View --

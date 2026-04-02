@@ -399,14 +399,20 @@ func (m incidentsModel) View() string {
 		w = 100
 	}
 
+	var content string
 	switch m.view {
 	case "resolve":
-		return m.renderResolveView(w)
+		content = m.renderResolveView(w)
 	case "snooze":
-		return m.renderSnoozeView(w)
+		content = m.renderSnoozeView(w)
 	default:
-		return m.renderIncidentListView(w)
+		content = m.renderIncidentListView(w)
 	}
+
+	if overlay := m.nav.ViewNav(w); overlay != "" {
+		content += "\n" + overlay + "\n"
+	}
+	return content
 }
 
 // -- List View --
