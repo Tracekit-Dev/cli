@@ -128,6 +128,13 @@ func (m dashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m dashModel) appendNavOverlay(content string) string {
+	if overlay := m.nav.ViewNav(m.width); overlay != "" {
+		return content + "\n" + overlay + "\n"
+	}
+	return content
+}
+
 func (m dashModel) View() string {
 	if m.quitting {
 		return ""
@@ -155,11 +162,11 @@ func (m dashModel) View() string {
 	if m.err != nil {
 		b.WriteString(lipgloss.NewStyle().Foreground(cDanger).Render(fmt.Sprintf("Error: %s", m.err.Error())))
 		b.WriteString("\n")
-		return b.String()
+		return m.appendNavOverlay(b.String())
 	}
 	if m.data == nil {
 		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Render("Loading..."))
-		return b.String()
+		return m.appendNavOverlay(b.String())
 	}
 
 	d := m.data
@@ -213,13 +220,7 @@ func (m dashModel) View() string {
 	b.WriteString(renderFooter(m))
 	b.WriteString("\n")
 
-	// Nav overlay (rendered on top if active)
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		// Place overlay at bottom-right area
-		b.WriteString("\n" + overlay + "\n")
-	}
-
-	return b.String()
+	return m.appendNavOverlay(b.String())
 }
 
 // -- Header line: "TraceKit  .  last 1h  .  refreshed 30s ago" --

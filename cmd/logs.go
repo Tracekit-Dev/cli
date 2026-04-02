@@ -192,6 +192,13 @@ func (m logsModel) viewableLines() int {
 	return h
 }
 
+func (m logsModel) appendNavOverlay(content string) string {
+	if overlay := m.nav.ViewNav(m.width); overlay != "" {
+		return content + "\n" + overlay + "\n"
+	}
+	return content
+}
+
 func (m logsModel) View() string {
 	if m.quitting {
 		return ""
@@ -256,12 +263,7 @@ func (m logsModel) View() string {
 	// -- Footer --
 	b.WriteString(m.renderLogFooter())
 
-	// Nav overlay (rendered on top if active)
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		b.WriteString("\n" + overlay + "\n")
-	}
-
-	return b.String()
+	return m.appendNavOverlay(b.String())
 }
 
 func (m logsModel) renderLogHeader(w int) string {

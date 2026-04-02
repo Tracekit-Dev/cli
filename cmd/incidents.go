@@ -389,6 +389,13 @@ func (m incidentsModel) handleSnoozeKey(key string) (tea.Model, tea.Cmd) {
 
 // -- View --
 
+func (m incidentsModel) appendNavOverlay(content string) string {
+	if overlay := m.nav.ViewNav(m.width); overlay != "" {
+		return content + "\n" + overlay + "\n"
+	}
+	return content
+}
+
 func (m incidentsModel) View() string {
 	if m.quitting {
 		return ""
@@ -409,10 +416,7 @@ func (m incidentsModel) View() string {
 		content = m.renderIncidentListView(w)
 	}
 
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		content += "\n" + overlay + "\n"
-	}
-	return content
+	return m.appendNavOverlay(content)
 }
 
 // -- List View --
@@ -522,12 +526,7 @@ func (m incidentsModel) renderIncidentListView(w int) string {
 	b.WriteString(lipgloss.NewStyle().Foreground(cDim).Render(helpBar))
 	b.WriteString("\n")
 
-	// Nav overlay (rendered on top if active)
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		b.WriteString("\n" + overlay + "\n")
-	}
-
-	return b.String()
+	return m.appendNavOverlay(b.String())
 }
 
 // -- Filter bar --

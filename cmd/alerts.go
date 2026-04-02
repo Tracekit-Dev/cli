@@ -547,6 +547,13 @@ func (m alertsModel) handleDeleteKey(key string) (tea.Model, tea.Cmd) {
 
 // -- View --
 
+func (m alertsModel) appendNavOverlay(content string) string {
+	if overlay := m.nav.ViewNav(m.width); overlay != "" {
+		return content + "\n" + overlay + "\n"
+	}
+	return content
+}
+
 func (m alertsModel) View() string {
 	if m.quitting {
 		return ""
@@ -569,10 +576,7 @@ func (m alertsModel) View() string {
 		content = m.renderAlertListView(w)
 	}
 
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		content += "\n" + overlay + "\n"
-	}
-	return content
+	return m.appendNavOverlay(content)
 }
 
 // -- List View --
@@ -638,12 +642,7 @@ func (m alertsModel) renderAlertListView(w int) string {
 	b.WriteString(footer)
 	b.WriteString("\n")
 
-	// Nav overlay (rendered on top if active)
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		b.WriteString("\n" + overlay + "\n")
-	}
-
-	return b.String()
+	return m.appendNavOverlay(b.String())
 }
 
 // -- History View --

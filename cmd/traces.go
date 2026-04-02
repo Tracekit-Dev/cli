@@ -371,6 +371,13 @@ func (m tracesModel) refetch() tea.Cmd {
 
 // -- View --
 
+func (m tracesModel) appendNavOverlay(content string) string {
+	if overlay := m.nav.ViewNav(m.width); overlay != "" {
+		return content + "\n" + overlay + "\n"
+	}
+	return content
+}
+
 func (m tracesModel) View() string {
 	if m.quitting {
 		return ""
@@ -393,11 +400,7 @@ func (m tracesModel) View() string {
 
 	// Detail view
 	if m.selectedTraceID != "" && m.detailTrace != nil {
-		content := m.renderDetailView()
-		if overlay := m.nav.ViewNav(m.width); overlay != "" {
-			content += "\n" + overlay + "\n"
-		}
-		return content
+		return m.appendNavOverlay(m.renderDetailView())
 	}
 
 	var b strings.Builder
@@ -410,13 +413,13 @@ func (m tracesModel) View() string {
 	// Service filter overlay
 	if m.filterMode == "service" {
 		b.WriteString(m.renderServicePicker(w))
-		return b.String()
+		return m.appendNavOverlay(b.String())
 	}
 
 	// Duration filter overlay
 	if m.filterMode == "duration" {
 		b.WriteString(m.renderDurationInput(w))
-		return b.String()
+		return m.appendNavOverlay(b.String())
 	}
 
 	// Loading state
@@ -424,7 +427,7 @@ func (m tracesModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("Loading traces..."))
 		b.WriteString("\n")
-		return b.String()
+		return m.appendNavOverlay(b.String())
 	}
 
 	// Error state
@@ -432,7 +435,7 @@ func (m tracesModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(cDanger).Padding(0, 2).Render(fmt.Sprintf("Error: %s", m.err.Error())))
 		b.WriteString("\n")
-		return b.String()
+		return m.appendNavOverlay(b.String())
 	}
 
 	// Empty state
@@ -440,10 +443,10 @@ func (m tracesModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(cMuted).Padding(0, 2).Render("No traces found"))
 		b.WriteString("\n")
-		hint := "Try adjusting filters or pressing 't' to change time range"
+		hint := "Try adjusting filters or pressing 't' to change time range  " + NavHint()
 		b.WriteString(lipgloss.NewStyle().Foreground(cDim).Padding(0, 2).Render(hint))
 		b.WriteString("\n")
-		return b.String()
+		return m.appendNavOverlay(b.String())
 	}
 
 	// Table header
@@ -475,12 +478,7 @@ func (m tracesModel) View() string {
 	b.WriteString(m.renderFooter())
 	b.WriteString("\n")
 
-	// Nav overlay (rendered on top if active)
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		b.WriteString("\n" + overlay + "\n")
-	}
-
-	return b.String()
+	return m.appendNavOverlay(b.String())
 }
 
 // -- Detail View --

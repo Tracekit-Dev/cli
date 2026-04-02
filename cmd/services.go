@@ -246,6 +246,13 @@ func (m servicesModel) handleDetailKey(key string) (tea.Model, tea.Cmd) {
 
 // -- View --
 
+func (m servicesModel) appendNavOverlay(content string) string {
+	if overlay := m.nav.ViewNav(m.width); overlay != "" {
+		return content + "\n" + overlay + "\n"
+	}
+	return content
+}
+
 func (m servicesModel) View() string {
 	if m.quitting {
 		return ""
@@ -267,10 +274,7 @@ func (m servicesModel) View() string {
 			} else {
 				content = m.renderMetricsTab(w)
 			}
-			if overlay := m.nav.ViewNav(w); overlay != "" {
-				content += "\n" + overlay + "\n"
-			}
-			return content
+			return m.appendNavOverlay(content)
 		}
 	}
 
@@ -336,12 +340,7 @@ func (m servicesModel) renderListView(w int) string {
 	b.WriteString(footer)
 	b.WriteString("\n")
 
-	// Nav overlay (rendered on top if active)
-	if overlay := m.nav.ViewNav(w); overlay != "" {
-		b.WriteString("\n" + overlay + "\n")
-	}
-
-	return b.String()
+	return m.appendNavOverlay(b.String())
 }
 
 // -- Detail: Metrics Tab --
