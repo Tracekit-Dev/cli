@@ -1,19 +1,397 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/yourusername/context.io/cli/internal/client"
 	"github.com/yourusername/context.io/cli/internal/config"
-	"github.com/yourusername/context.io/cli/internal/ui"
 	"github.com/yourusername/context.io/cli/internal/utils"
 )
+
+// -- Login Bubbletea messages --
+
+type loginRegisteredMsg struct {
+	resp *client.RegisterResponse
+}
+
+type loginVerifiedMsg struct {
+	resp *client.VerifyResponse
+}
+
+type loginSavedMsg struct{}
+
+type loginErrMsg struct {
+	err error
+}
+
+// -- Login wizard model --
+
+type loginWizardModel struct {
+	apiClient *client.Client
+	width     int
+	height    int
+	step      int // 0=email, 1=verify, 2=complete
+	quitting  bool
+	err       error
+
+	// Step 0: Email
+	email       string
+	serviceName string
+
+	// Step 1: Verify
+	sessionID string
+	code      string
+
+	// Step 2: Complete
+	verifyResp *client.VerifyResponse
+	savePath   string
+	saved      bool
+
+	// Flags
+	apiURL string
+	useDev bool
+}
+
+var loginSteps = []string{"Email", "Verify", "Complete"}
+
+func (m loginWizardModel) Init() tea.Cmd {
+	return nil
+}
+
+// -- Update --
+
+func (m loginWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
+	case loginRegisteredMsg:
+		m.sessionID = msg.resp.SessionID
+		m.err = nil
+		m.step = 1
+		return m, nil
+
+	case loginVerifiedMsg:
+		m.verifyResp = msg.resp
+		m.err = nil
+		m.step = 2
+		// Auto-save to global config
+		return m, m.saveConfigCmd()
+
+	case loginSavedMsg:
+		m.saved = true
+		return m, nil
+
+	case loginErrMsg:
+		m.err = msg.err
+		return m, nil
+
+	case tea.KeyMsg:
+		return m.handleKey(msg)
+	}
+
+	return m, nil
+}
+
+func (m loginWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "ctrl+c":
+		m.quitting = true
+		return m, tea.Quit
+	case "esc":
+		if m.step == 1 {
+			m.err = nil
+			m.code = ""
+			m.step = 0
+		}
+		return m, nil
+	}
+
+	switch m.step {
+	case 0:
+		return m.handleEmailKey(msg)
+	case 1:
+		return m.handleVerifyKey(msg)
+	case 2:
+		return m.handleCompleteKey(msg)
+	}
+
+	return m, nil
+}
+
+func (m loginWizardModel) handleEmailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "enter":
+		if strings.TrimSpace(m.email) == "" {
+			m.err = fmt.Errorf("email is required")
+			return m, nil
+		}
+		m.err = nil
+		return m, m.registerCmd()
+	case "backspace":
+		if len(m.email) > 0 {
+			m.email = m.email[:len(m.email)-1]
+		}
+	case "r":
+		if m.err != nil {
+			m.err = nil
+			return m, m.registerCmd()
+		}
+		m.email += key
+	default:
+		if len(key) == 1 {
+			m.email += key
+		}
+	}
+
+	return m, nil
+}
+
+func (m loginWizardModel) handleVerifyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "enter":
+		if strings.TrimSpace(m.code) == "" {
+			m.err = fmt.Errorf("verification code is required")
+			return m, nil
+		}
+		m.err = nil
+		return m, m.verifyCmd()
+	case "backspace":
+		if len(m.code) > 0 {
+			m.code = m.code[:len(m.code)-1]
+		}
+	case "r":
+		if m.err != nil {
+			m.err = nil
+			return m, m.verifyCmd()
+		}
+		if len(key) == 1 && len(m.code) < 6 {
+			m.code += key
+		}
+	default:
+		if len(key) == 1 && len(m.code) < 6 {
+			m.code += key
+		}
+	}
+
+	return m, nil
+}
+
+func (m loginWizardModel) handleCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter", "q":
+		m.quitting = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// -- Tea commands --
+
+func (m loginWizardModel) registerCmd() tea.Cmd {
+	return func() tea.Msg {
+		req := &client.RegisterRequest{
+			Email:            m.email,
+			OrganizationName: m.serviceName,
+			ServiceName:      m.serviceName,
+			Source:           "cli_login",
+			SourceMetadata: map[string]interface{}{
+				"cli_version": CLIVersion,
+				"platform":    runtime.GOOS + "_" + runtime.GOARCH,
+			},
+		}
+
+		resp, err := m.apiClient.Register(req)
+		if err != nil {
+			return loginErrMsg{err: fmt.Errorf("login failed: %w", err)}
+		}
+		return loginRegisteredMsg{resp: resp}
+	}
+}
+
+func (m loginWizardModel) verifyCmd() tea.Cmd {
+	return func() tea.Msg {
+		req := &client.VerifyRequest{
+			SessionID: m.sessionID,
+			Code:      m.code,
+		}
+
+		resp, err := m.apiClient.Verify(req)
+		if err != nil {
+			return loginErrMsg{err: fmt.Errorf("verification failed: %w", err)}
+		}
+		return loginVerifiedMsg{resp: resp}
+	}
+}
+
+func (m loginWizardModel) saveConfigCmd() tea.Cmd {
+	return func() tea.Msg {
+		cfg := &config.Config{
+			APIKey:                m.verifyResp.APIKey,
+			UserID:                m.verifyResp.UserID,
+			Endpoint:              m.apiClient.BaseURL,
+			ServiceName:           m.serviceName,
+			Enabled:               "true",
+			CodeMonitoringEnabled: "true",
+		}
+
+		if err := config.SaveGlobal(cfg); err != nil {
+			return loginErrMsg{err: fmt.Errorf("failed to save config: %w", err)}
+		}
+		return loginSavedMsg{}
+	}
+}
+
+// -- View --
+
+func (m loginWizardModel) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	var b strings.Builder
+	w := m.width
+	if w == 0 {
+		w = 80
+	}
+
+	// Title
+	title := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6366f1")).
+		Bold(true).
+		Render("TraceKit Login")
+	b.WriteString("\n " + title + "\n\n")
+
+	// Step indicator
+	b.WriteString(" " + renderLoginSteps(m.step, w) + "\n\n")
+
+	// Step content
+	switch m.step {
+	case 0:
+		b.WriteString(m.viewEmail(w))
+	case 1:
+		b.WriteString(m.viewVerify(w))
+	case 2:
+		b.WriteString(m.viewComplete(w))
+	}
+
+	// Error
+	if m.err != nil {
+		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+		b.WriteString("\n " + errStyle.Render(m.err.Error()))
+		b.WriteString("\n " + lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Press r to retry"))
+	}
+
+	// Footer
+	b.WriteString("\n\n")
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	if m.step < 2 {
+		b.WriteString(" " + footer.Render("enter submit  esc back  ctrl+c quit"))
+	} else {
+		b.WriteString(" " + footer.Render("enter/q quit"))
+	}
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+func renderLoginSteps(current int, w int) string {
+	var parts []string
+	for i, name := range loginSteps {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+		if i < current {
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+			parts = append(parts, style.Render("["+fmt.Sprintf("%d", i+1)+"] "+name+" ✓"))
+		} else if i == current {
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1")).Bold(true)
+			parts = append(parts, style.Render("["+fmt.Sprintf("%d", i+1)+"] "+name))
+		} else {
+			parts = append(parts, style.Render("["+fmt.Sprintf("%d", i+1)+"] "+name))
+		}
+	}
+	sep := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(" > ")
+	return strings.Join(parts, sep)
+}
+
+func (m loginWizardModel) viewEmail(w int) string {
+	var b strings.Builder
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+
+	b.WriteString(" " + text.Bold(true).Render("Enter your email address") + "\n\n")
+	b.WriteString(" " + dim.Render("Email: ") + text.Render(m.email) + text.Render("_") + "\n")
+
+	return b.String()
+}
+
+func (m loginWizardModel) viewVerify(w int) string {
+	var b strings.Builder
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	success := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+
+	b.WriteString(" " + success.Render("Verification code sent to "+m.email) + "\n\n")
+	b.WriteString(" " + text.Bold(true).Render("Enter the 6-digit code from your email") + "\n\n")
+
+	// Render code boxes
+	boxes := ""
+	for i := 0; i < 6; i++ {
+		if i < len(m.code) {
+			boxes += text.Bold(true).Render(" " + string(m.code[i]) + " ")
+		} else if i == len(m.code) {
+			boxes += lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1")).Render(" _ ")
+		} else {
+			boxes += dim.Render(" . ")
+		}
+	}
+	b.WriteString(" " + dim.Render("Code: ") + boxes + "\n")
+
+	return b.String()
+}
+
+func (m loginWizardModel) viewComplete(w int) string {
+	var b strings.Builder
+	success := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	brand := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366f1"))
+
+	b.WriteString(" " + success.Bold(true).Render("Login successful!") + "\n\n")
+
+	if m.verifyResp != nil {
+		b.WriteString(" " + dim.Render("Dashboard:  ") + brand.Render(m.verifyResp.DashboardURL) + "\n")
+		b.WriteString(" " + dim.Render("API Key:    ") + text.Render(utils.MaskAPIKey(m.verifyResp.APIKey)) + "\n")
+		b.WriteString(" " + dim.Render("Service:    ") + text.Render(m.verifyResp.ServiceName) + "\n")
+	}
+
+	if m.saved {
+		b.WriteString("\n " + success.Render("Saved to "+m.savePath) + "\n")
+	}
+
+	b.WriteString("\n " + dim.Render("Next steps:") + "\n")
+	b.WriteString(" " + text.Render("  tracekit dashboard") + dim.Render("   -- view live dashboard") + "\n")
+	b.WriteString(" " + text.Render("  tracekit traces") + dim.Render("      -- browse traces") + "\n")
+	b.WriteString(" " + text.Render("  tracekit alerts") + dim.Render("      -- manage alerts") + "\n")
+
+	return b.String()
+}
+
+// -- Cobra command --
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
@@ -23,15 +401,14 @@ var loginCmd = &cobra.Command{
 This command will:
   1. Verify your email with a verification code
   2. Generate a new API key for your organization
-  3. Save configuration to ~/.tracekitconfig (or .env with --env flag)
+  3. Save configuration to ~/.tracekitconfig
 
 All CLI commands will automatically find your API key from ~/.tracekitconfig,
 so you don't need to pass it every time.
 
 Example:
   tracekit login
-  tracekit login --email=dev@example.com
-  tracekit login --env .env           # save to local .env instead`,
+  tracekit login --email=dev@example.com`,
 	RunE: runLogin,
 }
 
@@ -44,138 +421,32 @@ func init() {
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
-	// Print beautiful banner
-	ui.PrintBanner()
-	fmt.Println()
-
-	// Step 1: Get email
-	ui.PrintSection("📧 Account Login")
-	fmt.Println()
-
 	email, _ := cmd.Flags().GetString("email")
-	if email == "" {
-		var err error
-		email, err = promptEmail()
-		if err != nil {
-			return err
-		}
+	apiURL, _ := cmd.Flags().GetString("api-url")
+	useDev, _ := cmd.Flags().GetBool("dev")
+
+	if useDev {
+		apiURL = client.DevBaseURL
 	}
 
-	// Get service name from directory
+	apiClient := client.NewClient(apiURL)
+
 	cwd, _ := os.Getwd()
 	serviceName := strings.ToLower(strings.ReplaceAll(filepath.Base(cwd), " ", "-"))
 
-	// Determine API URL
-	apiURL, _ := cmd.Flags().GetString("api-url")
-	useDev, _ := cmd.Flags().GetBool("dev")
-	if useDev {
-		apiURL = client.DevBaseURL
-		ui.PrintInfo("Using development API: " + apiURL)
-		fmt.Println()
+	model := loginWizardModel{
+		apiClient:   apiClient,
+		email:       email,
+		serviceName: serviceName,
+		savePath:    config.GlobalConfigPath(),
+		apiURL:      apiURL,
+		useDev:      useDev,
 	}
 
-	// Step 2: Register session (same as init, but will get existing account)
-	apiClient := client.NewClient(apiURL)
-
-	registerReq := &client.RegisterRequest{
-		Email:            email,
-		OrganizationName: serviceName,
-		ServiceName:      serviceName,
-		Source:           "cli_login",
-		SourceMetadata: map[string]interface{}{
-			"cli_version": CLIVersion,
-			"platform":    runtime.GOOS + "_" + runtime.GOARCH,
-		},
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("login error: %w", err)
 	}
-
-	registerResp, err := apiClient.Register(registerReq)
-	if err != nil {
-		return fmt.Errorf("login failed: %w", err)
-	}
-
-	ui.PrintSuccess(fmt.Sprintf("Verification code sent to %s", email))
-	fmt.Println()
-
-	// Step 3: Get verification code
-	ui.PrintSection("🔑 Email Verification")
-	fmt.Println()
-	ui.PrintPrompt("Enter 6-digit code:")
-	var code string
-	fmt.Scanln(&code)
-	fmt.Println()
-
-	// Step 4: Verify and get API key
-	ui.PrintInfo("Verifying...")
-	verifyReq := &client.VerifyRequest{
-		SessionID: registerResp.SessionID,
-		Code:      code,
-	}
-
-	verifyResp, err := apiClient.Verify(verifyReq)
-	if err != nil {
-		return fmt.Errorf("verification failed: %w", err)
-	}
-
-	ui.PrintSuccess("Login successful!")
-	fmt.Println()
-
-	// Step 5: Always save auth to ~/.tracekitconfig (global config)
-	cfg := &config.Config{
-		APIKey:                verifyResp.APIKey,
-		UserID:                verifyResp.UserID,
-		Endpoint:              apiClient.BaseURL,
-		ServiceName:           serviceName,
-		Enabled:               "true",
-		CodeMonitoringEnabled: "true",
-	}
-
-	savePath := config.GlobalConfigPath()
-
-	if err := config.SaveGlobal(cfg); err != nil {
-		ui.PrintWarning(fmt.Sprintf("Failed to save config to %s: %v", savePath, err))
-		fmt.Println()
-		ui.PrintMuted("Manual setup required:")
-		ui.PrintMuted(fmt.Sprintf("   Add TRACEKIT_API_KEY=%s to ~/.tracekitconfig", verifyResp.APIKey))
-	} else {
-		ui.PrintSuccess(fmt.Sprintf("Authenticated as %s -- saved to %s", email, savePath))
-	}
-	fmt.Println()
-
-	// Step 6: Show summary
-	ui.PrintDivider()
-	fmt.Println()
-
-	summary := fmt.Sprintf("Dashboard:  %s\nAPI Key:    %s\nService:    %s",
-		verifyResp.DashboardURL,
-		utils.MaskAPIKey(verifyResp.APIKey),
-		verifyResp.ServiceName)
-
-	ui.PrintSummaryBox("✅ Login Complete!", summary)
-	fmt.Println()
-
-	steps := []string{
-		fmt.Sprintf("Your API key has been saved to %s", savePath),
-		"Run 'tracekit status' to verify your setup",
-		"Run 'tracekit dashboard' to view your dashboard",
-		"Visit " + verifyResp.DashboardURL + " to view traces in browser",
-	}
-	ui.PrintNextSteps(steps)
 
 	return nil
-}
-
-func promptEmailForLogin() (string, error) {
-	ui.PrintPrompt("Enter your email:")
-	reader := bufio.NewReader(os.Stdin)
-	email, err := reader.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("failed to read email: %w", err)
-	}
-
-	email = strings.TrimSpace(email)
-	if email == "" {
-		return "", fmt.Errorf("email is required")
-	}
-
-	return email, nil
 }
