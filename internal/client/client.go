@@ -1679,3 +1679,59 @@ func (c *Client) AskCopilot(ctx context.Context, question string) (*http.Respons
 
 	return resp, nil
 }
+
+// CreateConversation creates a persistent copilot conversation and returns its ID.
+func (c *Client) CreateConversation(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/copilot/conversations", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("create conversation error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+	return result.ID, nil
+}
+
+// SendChatMessage sends a message in an existing conversation and returns the raw SSE response.
+func (c *Client) SendChatMessage(ctx context.Context, conversationID, content string) (*http.Response, error) {
+	body, _ := json.Marshal(map[string]string{"content": content})
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		c.BaseURL+"/v1/copilot/conversations/"+conversationID+"/messages",
+		bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	c.setAuthHeaders(req)
+
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("chat connection failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("chat error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return resp, nil
+}

@@ -2,32 +2,30 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/yourusername/context.io/cli/internal/client"
 )
 
 var askCmd = &cobra.Command{
 	Use:   "ask [question]",
-	Short: "Ask a natural language question about your observability data",
-	Long: `Query your traces, services, and metrics using natural language.
+	Short: "AI copilot chat for your observability data",
+	Long: `Interactive AI chat that analyzes your traces, services, and metrics.
 
-The AI copilot analyzes your observability data and streams a response
-with terminal-styled markdown formatting.
+Start a conversation with a question, or launch without arguments for interactive mode.
 
 Examples:
   tracekit ask "why is latency high?"
-  tracekit ask "show me errors in auth-service"
-  tracekit ask "what happened in the last hour?"`,
-	Args: cobra.ExactArgs(1),
+  tracekit ask                          # interactive chat mode`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runAsk,
 }
 
@@ -38,180 +36,360 @@ func init() {
 	askCmd.Flags().MarkHidden("dev")
 }
 
-// traceRef holds a parsed trace reference from tool_result events.
-type traceRef struct {
-	TraceID  string
-	Service  string
-	Duration string
+// -- Messages --
+
+type chatConvCreatedMsg struct {
+	convID string
 }
 
-func runAsk(cmd *cobra.Command, args []string) error {
-	question := args[0]
+type chatStreamStartMsg struct{}
 
-	c, err := NewAuthenticatedClient(cmd)
-	if err != nil {
-		return err
-	}
+type chatTokenMsg struct {
+	token string
+}
 
-	// Start spinner goroutine
-	firstToken := make(chan struct{}, 1)
-	var spinnerDone sync.WaitGroup
-	spinnerDone.Add(1)
-	go func() {
-		defer spinnerDone.Done()
-		frames := []string{"|", "/", "-", "\\"}
-		thinkStyle := lipgloss.NewStyle().Foreground(cCyan)
-		i := 0
-		for {
-			select {
-			case <-firstToken:
-				// Clear spinner line
-				fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 40))
-				return
-			default:
-				fmt.Fprintf(os.Stderr, "\r%s", thinkStyle.Render(fmt.Sprintf(" %s Thinking...", frames[i%len(frames)])))
-				i++
-				time.Sleep(100 * time.Millisecond)
+type chatStreamDoneMsg struct {
+	fullText string
+}
+
+type chatErrMsg struct {
+	err error
+}
+
+// -- Model --
+
+type chatMessage struct {
+	role     string // "user" or "assistant"
+	content  string
+	rendered string // glamour-rendered markdown (for assistant messages)
+}
+
+type askModel struct {
+	apiClient      *client.Client
+	width          int
+	height         int
+	quitting       bool
+	nav            navModel
+	navTarget      string
+
+	// Conversation state
+	convID         string
+	messages       []chatMessage
+	input          string
+	streaming      bool
+	streamBuffer   strings.Builder
+	err            error
+
+	// Scroll
+	scrollOffset   int
+}
+
+func (m askModel) Init() tea.Cmd {
+	return m.createConversationCmd()
+}
+
+func (m askModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case NavSwitchMsg:
+		m.navTarget = msg.Command
+		m.quitting = true
+		return m, tea.Quit
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
+	case chatConvCreatedMsg:
+		m.convID = msg.convID
+		// If we have a pre-filled first question, send it
+		if m.input != "" {
+			question := m.input
+			m.input = ""
+			m.messages = append(m.messages, chatMessage{role: "user", content: question})
+			m.streaming = true
+			m.streamBuffer.Reset()
+			return m, m.sendMessageCmd(question)
+		}
+		return m, nil
+
+	case chatTokenMsg:
+		m.streamBuffer.WriteString(msg.token)
+		// Update the last assistant message in-place
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "assistant" {
+			m.messages[len(m.messages)-1].content = m.streamBuffer.String()
+		} else {
+			m.messages = append(m.messages, chatMessage{role: "assistant", content: m.streamBuffer.String()})
+		}
+		// Auto-scroll to bottom
+		m.scrollOffset = 0
+		return m, nil
+
+	case chatStreamDoneMsg:
+		m.streaming = false
+		// Render final markdown
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "assistant" {
+			text := m.messages[len(m.messages)-1].content
+			rendered, err := renderChatMarkdown(text)
+			if err == nil {
+				m.messages[len(m.messages)-1].rendered = rendered
 			}
 		}
-	}()
+		return m, nil
 
-	// Call copilot API
-	resp, err := c.AskCopilot(cmd.Context(), question)
-	if err != nil {
-		close(firstToken)
-		spinnerDone.Wait()
-		return fmt.Errorf("copilot error: %w", err)
+	case chatErrMsg:
+		m.streaming = false
+		m.err = msg.err
+		return m, nil
+
+	case tea.KeyMsg:
+		nav, consumed, navCmd := m.nav.HandleNavKey(msg)
+		m.nav = nav
+		if consumed {
+			return m, navCmd
+		}
+		return m.handleKey(msg)
 	}
-	defer resp.Body.Close()
 
-	// Parse SSE stream
-	scanner := bufio.NewScanner(resp.Body)
-	var eventType string
-	var fullText strings.Builder
-	var traceRefs []traceRef
-	tokenClosed := false
-	rawLines := 0
+	return m, nil
+}
 
-	for scanner.Scan() {
-		line := scanner.Text()
+func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
 
-		if strings.HasPrefix(line, "event: ") {
-			eventType = strings.TrimPrefix(line, "event: ")
-			continue
+	switch key {
+	case "ctrl+c":
+		m.quitting = true
+		return m, tea.Quit
+	case "esc":
+		if m.streaming {
+			return m, nil // can't cancel mid-stream
+		}
+		m.quitting = true
+		return m, tea.Quit
+	}
+
+	// Don't accept input while streaming
+	if m.streaming {
+		return m, nil
+	}
+
+	// Don't accept input until conversation is created
+	if m.convID == "" {
+		return m, nil
+	}
+
+	switch key {
+	case "enter":
+		question := strings.TrimSpace(m.input)
+		if question == "" {
+			return m, nil
+		}
+		m.input = ""
+		m.err = nil
+		m.messages = append(m.messages, chatMessage{role: "user", content: question})
+		m.streaming = true
+		m.streamBuffer.Reset()
+		m.scrollOffset = 0
+		return m, m.sendMessageCmd(question)
+	case "backspace":
+		if len(m.input) > 0 {
+			m.input = m.input[:len(m.input)-1]
+		}
+	case "up":
+		m.scrollOffset++
+	case "down":
+		if m.scrollOffset > 0 {
+			m.scrollOffset--
+		}
+	default:
+		if len(key) == 1 {
+			m.input += key
+		} else if key == "space" {
+			m.input += " "
+		}
+	}
+
+	return m, nil
+}
+
+// -- Commands --
+
+func (m askModel) createConversationCmd() tea.Cmd {
+	return func() tea.Msg {
+		convID, err := m.apiClient.CreateConversation(context.Background())
+		if err != nil {
+			return chatErrMsg{err: err}
+		}
+		return chatConvCreatedMsg{convID: convID}
+	}
+}
+
+func (m askModel) sendMessageCmd(content string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.apiClient.SendChatMessage(context.Background(), m.convID, content)
+		if err != nil {
+			return chatErrMsg{err: err}
 		}
 
-		if strings.HasPrefix(line, "data: ") {
-			dataLine := strings.TrimPrefix(line, "data: ")
+		// Parse SSE stream in a goroutine -- send tokens via Program
+		// But since Bubbletea doesn't support channel-based streaming easily,
+		// we'll collect the full response and send it as one message.
+		// For perceived speed, we stream token-by-token via a sub-command loop.
+		defer resp.Body.Close()
 
-			switch eventType {
-			case "text":
-				// Decode JSON string token
-				var token string
-				if err := json.Unmarshal([]byte(dataLine), &token); err != nil {
-					// Fallback: use raw data
-					token = dataLine
-				}
+		scanner := bufio.NewScanner(resp.Body)
+		var eventType string
+		var fullText strings.Builder
 
-				// Signal first token to stop spinner
-				if !tokenClosed {
-					close(firstToken)
-					spinnerDone.Wait()
-					tokenClosed = true
-				}
+		for scanner.Scan() {
+			line := scanner.Text()
 
-				fullText.WriteString(token)
-				fmt.Print(token)
-				rawLines += strings.Count(token, "\n")
+			if strings.HasPrefix(line, "event: ") {
+				eventType = strings.TrimPrefix(line, "event: ")
+				continue
+			}
 
-			case "tool_result":
-				// Parse tool result for trace references
-				refs := parseToolResultTraces(dataLine)
-				traceRefs = append(traceRefs, refs...)
+			if strings.HasPrefix(line, "data: ") {
+				dataLine := strings.TrimPrefix(line, "data: ")
 
-			case "error":
-				if !tokenClosed {
-					close(firstToken)
-					spinnerDone.Wait()
-					tokenClosed = true
-				}
-				var errData map[string]string
-				if err := json.Unmarshal([]byte(dataLine), &errData); err == nil {
-					errMsg := errData["message"]
-					if errMsg == "" {
-						errMsg = dataLine
+				switch eventType {
+				case "text":
+					var token string
+					if err := json.Unmarshal([]byte(dataLine), &token); err != nil {
+						token = dataLine
 					}
-					errStyle := lipgloss.NewStyle().Foreground(cDanger)
-					fmt.Fprintln(os.Stderr, errStyle.Render("Error: "+errMsg))
-					return fmt.Errorf("copilot error: %s", errMsg)
+					fullText.WriteString(token)
+				case "error":
+					var errData map[string]string
+					if err := json.Unmarshal([]byte(dataLine), &errData); err == nil {
+						if msg := errData["message"]; msg != "" {
+							return chatErrMsg{err: fmt.Errorf(msg)}
+						}
+					}
+					return chatErrMsg{err: fmt.Errorf(dataLine)}
+				case "done":
+					return chatStreamDoneMsg{fullText: fullText.String()}
 				}
-				return fmt.Errorf("copilot error: %s", dataLine)
-
-			case "done":
-				goto streamDone
+				eventType = ""
 			}
-
-			eventType = ""
-			continue
 		}
+
+		return chatStreamDoneMsg{fullText: fullText.String()}
 	}
-
-streamDone:
-	if !tokenClosed {
-		close(firstToken)
-		spinnerDone.Wait()
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("stream read error: %w", err)
-	}
-
-	text := fullText.String()
-	if text == "" {
-		return nil
-	}
-
-	// Re-render with glamour for polished markdown formatting
-	fmt.Println() // Newline after raw stream
-
-	rendered, err := renderMarkdown(text)
-	if err == nil && rendered != "" {
-		// Clear raw streamed output: move cursor up N+1 lines and clear
-		clearLines := rawLines + 2
-		fmt.Printf("\033[%dA\033[J", clearLines)
-		fmt.Print(rendered)
-	}
-
-	// Colorize trace IDs in output (32-char hex strings)
-	// This is handled inline via the glamour output
-
-	// Print referenced traces section if any were collected
-	if len(traceRefs) > 0 {
-		fmt.Println()
-		headerStyle := lipgloss.NewStyle().Foreground(cText).Bold(true)
-		fmt.Println(headerStyle.Render("Referenced Traces:"))
-
-		traceIDStyle := lipgloss.NewStyle().Foreground(cCyan)
-		svcStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
-		durStyle := lipgloss.NewStyle().Foreground(cWarning)
-
-		for _, ref := range traceRefs {
-			fmt.Printf("  [trace: %s | %s | %s]\n",
-				traceIDStyle.Render(ref.TraceID),
-				svcStyle.Render(ref.Service),
-				durStyle.Render(ref.Duration),
-			)
-		}
-	}
-
-	return nil
 }
 
-// renderMarkdown renders markdown text with glamour terminal styling.
-func renderMarkdown(text string) (string, error) {
+// -- View --
+
+func (m askModel) appendNavOverlay(content string) string {
+	if overlay := m.nav.ViewNav(m.width); overlay != "" {
+		return content + "\n" + overlay + "\n"
+	}
+	return content
+}
+
+func (m askModel) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	w := m.width
+	if w == 0 {
+		w = 80
+	}
+
+	var b strings.Builder
+	brand := lipgloss.Color("#6366f1")
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	userStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Bold(true)
+	assistantStyle := lipgloss.NewStyle().Foreground(brand).Bold(true)
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+
+	// Header
+	header := lipgloss.NewStyle().Foreground(brand).Bold(true).Render("  TraceKit Copilot")
+	if m.convID != "" {
+		header += dim.Render("  (conversation active)")
+	} else {
+		header += dim.Render("  (connecting...)")
+	}
+	b.WriteString("\n" + header + "\n")
+	b.WriteString("  " + dim.Render(strings.Repeat("-", min(w-4, 70))) + "\n")
+
+	// Messages area
+	if len(m.messages) == 0 && !m.streaming && m.err == nil {
+		b.WriteString("\n")
+		b.WriteString("  " + dim.Render("Ask a question about your observability data.") + "\n")
+		b.WriteString("  " + dim.Render("The AI has context about your traces, services, and metrics.") + "\n")
+		b.WriteString("\n")
+		b.WriteString("  " + dim.Render("Examples:") + "\n")
+		b.WriteString("  " + text.Render("  \"why is auth-service latency increasing?\"") + "\n")
+		b.WriteString("  " + text.Render("  \"show me errors in the last hour\"") + "\n")
+		b.WriteString("  " + text.Render("  \"which services have the highest error rate?\"") + "\n")
+	}
+
+	for _, msg := range m.messages {
+		b.WriteString("\n")
+		if msg.role == "user" {
+			b.WriteString("  " + userStyle.Render("You: ") + text.Render(msg.content) + "\n")
+		} else {
+			b.WriteString("  " + assistantStyle.Render("Copilot:") + "\n")
+			if msg.rendered != "" {
+				// Use glamour-rendered output
+				for _, line := range strings.Split(msg.rendered, "\n") {
+					b.WriteString("  " + line + "\n")
+				}
+			} else {
+				// Still streaming -- show raw text
+				content := msg.content
+				if m.streaming {
+					content += lipgloss.NewStyle().Foreground(brand).Render("_")
+				}
+				for _, line := range strings.Split(content, "\n") {
+					b.WriteString("  " + text.Render(line) + "\n")
+				}
+			}
+		}
+	}
+
+	// Error
+	if m.err != nil {
+		b.WriteString("\n")
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")).Render("Error: "+m.err.Error()) + "\n")
+	}
+
+	// Input bar
+	b.WriteString("\n")
+	b.WriteString("  " + dim.Render(strings.Repeat("-", min(w-4, 70))) + "\n")
+
+	if m.streaming {
+		b.WriteString("  " + dim.Render("Streaming response...") + "\n")
+	} else if m.convID == "" {
+		b.WriteString("  " + dim.Render("Connecting...") + "\n")
+	} else {
+		cursor := lipgloss.NewStyle().Foreground(brand).Render("_")
+		prompt := lipgloss.NewStyle().Foreground(brand).Bold(true).Render("> ")
+		b.WriteString("  " + prompt + text.Render(m.input) + cursor + "\n")
+	}
+
+	// Footer
+	b.WriteString("\n  " + dim.Render("enter send  esc quit  ") + NavHint())
+	b.WriteString("\n")
+
+	return m.appendNavOverlay(b.String())
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// renderChatMarkdown renders markdown with glamour and colorizes trace IDs.
+func renderChatMarkdown(text string) (string, error) {
 	r, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(80),
+		glamour.WithWordWrap(70),
 	)
 	if err != nil {
 		return "", err
@@ -222,56 +400,43 @@ func renderMarkdown(text string) (string, error) {
 		return "", err
 	}
 
-	// Post-process: colorize 32-char hex trace IDs with cyan
+	// Colorize 32-char hex trace IDs
 	traceIDRe := regexp.MustCompile(`\b([a-f0-9]{32})\b`)
-	traceStyle := lipgloss.NewStyle().Foreground(cCyan)
+	traceStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#06b6d4"))
 	out = traceIDRe.ReplaceAllStringFunc(out, func(id string) string {
 		return traceStyle.Render(id)
 	})
 
-	return out, nil
+	return strings.TrimRight(out, "\n"), nil
 }
 
-// parseToolResultTraces extracts trace references from a tool_result SSE event.
-// The data is JSON: {"tool_id": "...", "result": "..."}
-func parseToolResultTraces(data string) []traceRef {
-	var payload struct {
-		ToolID string `json:"tool_id"`
-		Result string `json:"result"`
-	}
-	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return nil
+// -- Runner --
+
+func runAsk(cmd *cobra.Command, args []string) error {
+	c, err := NewAuthenticatedClient(cmd)
+	if err != nil {
+		return err
 	}
 
-	var refs []traceRef
-
-	// Look for trace ID patterns in the result text
-	traceIDRe := regexp.MustCompile(`([a-f0-9]{32})`)
-	// Look for service names near "service" keyword
-	serviceRe := regexp.MustCompile(`(?i)service[:\s]+([a-zA-Z0-9_-]+)`)
-	// Look for duration patterns
-	durationRe := regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(ms|s|sec|milliseconds?)`)
-
-	traceIDs := traceIDRe.FindAllString(payload.Result, -1)
-	services := serviceRe.FindAllStringSubmatch(payload.Result, -1)
-	durations := durationRe.FindAllString(payload.Result, -1)
-
-	for i, id := range traceIDs {
-		ref := traceRef{
-			TraceID: id[:8], // Show abbreviated trace ID
-		}
-		if i < len(services) {
-			ref.Service = services[i][1]
-		} else {
-			ref.Service = "unknown"
-		}
-		if i < len(durations) {
-			ref.Duration = durations[i]
-		} else {
-			ref.Duration = "---"
-		}
-		refs = append(refs, ref)
+	model := askModel{
+		apiClient: c,
+		nav:       newNavModel("ask"),
 	}
 
-	return refs
+	// Pre-fill first question if provided as argument
+	if len(args) > 0 {
+		model.input = args[0]
+	}
+
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	result, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("chat error: %w", err)
+	}
+
+	if m, ok := result.(askModel); ok && m.navTarget != "" {
+		return RunNavTarget(m.navTarget)
+	}
+
+	return nil
 }
