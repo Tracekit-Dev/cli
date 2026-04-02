@@ -18,6 +18,7 @@ type Config struct {
 	ServiceName           string `json:"service_name"`
 	Enabled               string `json:"enabled"`
 	CodeMonitoringEnabled string `json:"code_monitoring_enabled"`
+	Tag                  string `json:"tag,omitempty"`
 }
 
 // configFile is the on-disk JSON structure for ~/.tracekitconfig
@@ -256,8 +257,8 @@ func ListProfiles() (profiles map[string]*Config, active string, err error) {
 	return cf.Profiles, cf.Active, nil
 }
 
-// SetActiveProfile switches the active profile to the given endpoint URL.
-func SetActiveProfile(url string) error {
+// SetActiveProfile switches the active profile by URL or tag name.
+func SetActiveProfile(urlOrTag string) error {
 	globalPath := GlobalConfigPath()
 	if globalPath == "" {
 		return fmt.Errorf("could not determine home directory")
@@ -268,13 +269,52 @@ func SetActiveProfile(url string) error {
 		return err
 	}
 
-	key := normalizeURL(url)
-	if _, ok := cf.Profiles[key]; !ok {
-		return fmt.Errorf("no profile for %s. Run 'tracekit login --api-url %s'", url, url)
+	key := resolveProfile(cf, urlOrTag)
+	if key == "" {
+		return fmt.Errorf("no profile matching %q. Run 'tracekit profile' to list profiles", urlOrTag)
 	}
 
 	cf.Active = key
 	return writeConfigFile(globalPath, cf)
+}
+
+// TagProfile sets a tag name on a profile identified by URL or existing tag.
+func TagProfile(urlOrTag string, tag string) error {
+	globalPath := GlobalConfigPath()
+	if globalPath == "" {
+		return fmt.Errorf("could not determine home directory")
+	}
+
+	cf, err := readConfigFile(globalPath)
+	if err != nil {
+		return err
+	}
+
+	key := resolveProfile(cf, urlOrTag)
+	if key == "" {
+		return fmt.Errorf("no profile matching %q. Run 'tracekit profile' to list profiles", urlOrTag)
+	}
+
+	cf.Profiles[key].Tag = tag
+	return writeConfigFile(globalPath, cf)
+}
+
+// resolveProfile finds a profile key by URL or tag name.
+func resolveProfile(cf *configFile, urlOrTag string) string {
+	// Try direct URL match first
+	key := normalizeURL(urlOrTag)
+	if _, ok := cf.Profiles[key]; ok {
+		return key
+	}
+
+	// Try tag match
+	for url, profile := range cf.Profiles {
+		if profile.Tag != "" && strings.EqualFold(profile.Tag, urlOrTag) {
+			return url
+		}
+	}
+
+	return ""
 }
 
 // RemoveProfile deletes a saved profile by URL.
@@ -289,9 +329,9 @@ func RemoveProfile(url string) error {
 		return err
 	}
 
-	key := normalizeURL(url)
-	if _, ok := cf.Profiles[key]; !ok {
-		return fmt.Errorf("no profile for %s", url)
+	key := resolveProfile(cf, url)
+	if key == "" {
+		return fmt.Errorf("no profile matching %q", url)
 	}
 
 	delete(cf.Profiles, key)
