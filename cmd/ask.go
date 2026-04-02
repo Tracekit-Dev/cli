@@ -119,6 +119,7 @@ func (m askModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatStreamDoneMsg:
 		m.streaming = false
+		m.input = "" // clear any garbage from terminal escape responses
 		// Render final markdown
 		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "assistant" {
 			text := m.messages[len(m.messages)-1].content
@@ -364,7 +365,7 @@ func askMin(a, b int) int {
 // renderChatMarkdown renders markdown with glamour and colorizes trace IDs.
 func renderChatMarkdown(text string) (string, error) {
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStylePath("dark"),
 		glamour.WithWordWrap(70),
 	)
 	if err != nil {
