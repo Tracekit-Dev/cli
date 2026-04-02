@@ -936,7 +936,7 @@ func (c *Client) StreamTraces(ctx context.Context, service string, errorsOnly bo
 		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(req)
 
 	// Use a dedicated client with no timeout for streaming
 	streamClient := &http.Client{}
@@ -1663,7 +1663,7 @@ func (c *Client) AskCopilot(ctx context.Context, question string) (*http.Respons
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("X-API-Key", c.APIKey)
+	c.setAuthHeaders(req)
 
 	// Use a dedicated client with no timeout for streaming
 	streamClient := &http.Client{}
