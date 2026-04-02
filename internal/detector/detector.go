@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -245,4 +246,192 @@ func detectRubyFramework(dir string) (*Framework, error) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// healthPatterns are the endpoint paths we scan for in source files.
+var healthPatterns = []string{"/health", "/healthz", "/ready", "/readiness", "/liveness"}
+
+// skipDirs are directories we never descend into during health endpoint scanning.
+var skipDirs = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	"vendor":       true,
+	"dist":         true,
+	"build":        true,
+	"__pycache__":  true,
+}
+
+// DetectHealthEndpoints scans the current directory for health check endpoint
+// registrations based on the detected framework. It walks files up to 3 levels
+// deep, reading at most 64KB per file, and returns a deduplicated list of
+// detected endpoint paths.
+func DetectHealthEndpoints(framework *Framework) []string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return []string{}
+	}
+
+	// Determine which file extensions to scan based on framework type
+	exts := extensionsForFramework(framework)
+
+	seen := make(map[string]bool)
+	baseDepth := strings.Count(filepath.ToSlash(cwd), "/")
+
+	_ = filepath.WalkDir(cwd, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+
+		// Enforce max depth of 3
+		depth := strings.Count(filepath.ToSlash(path), "/") - baseDepth
+		if depth > 3 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Skip ignored directories
+		if d.IsDir() {
+			if skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Filter by extension
+		ext := strings.ToLower(filepath.Ext(path))
+		if !exts[ext] {
+			return nil
+		}
+
+		// Read file content (max 64KB)
+		content := readFileHead(path, 64*1024)
+		if content == "" {
+			return nil
+		}
+
+		// Extract health endpoints from content
+		for _, ep := range extractHealthEndpoints(content) {
+			seen[ep] = true
+		}
+
+		return nil
+	})
+
+	// Deduplicated results
+	endpoints := make([]string, 0, len(seen))
+	for ep := range seen {
+		endpoints = append(endpoints, ep)
+	}
+	return endpoints
+}
+
+// extensionsForFramework returns the set of file extensions to scan.
+func extensionsForFramework(fw *Framework) map[string]bool {
+	if fw == nil {
+		return genericExtensions()
+	}
+	switch fw.Type {
+	case "go":
+		return map[string]bool{".go": true}
+	case "node":
+		return map[string]bool{".js": true, ".ts": true, ".mjs": true}
+	case "python":
+		return map[string]bool{".py": true}
+	case "php":
+		return map[string]bool{".php": true}
+	case "ruby":
+		return map[string]bool{".rb": true}
+	default:
+		return genericExtensions()
+	}
+}
+
+func genericExtensions() map[string]bool {
+	return map[string]bool{
+		".go": true, ".js": true, ".ts": true, ".mjs": true,
+		".py": true, ".php": true, ".rb": true,
+	}
+}
+
+// readFileHead reads up to maxBytes from a file. Returns empty string on error.
+func readFileHead(path string, maxBytes int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	lr := io.LimitReader(f, maxBytes)
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// extractHealthEndpoints finds health-related endpoint paths in file content.
+// It looks for common route registration patterns and plain string matches.
+func extractHealthEndpoints(content string) []string {
+	var found []string
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		for _, pattern := range healthPatterns {
+			if !strings.Contains(lower, pattern) {
+				continue
+			}
+			// Try to extract the actual path from the line
+			ep := extractPath(line, pattern)
+			if ep != "" {
+				found = append(found, ep)
+			}
+		}
+	}
+	return found
+}
+
+// extractPath attempts to extract a URL path from a source code line.
+// It looks for quoted strings containing the health pattern.
+func extractPath(line string, pattern string) string {
+	// Look for the pattern inside quotes (single or double)
+	for _, quote := range []byte{'"', '\'', '`'} {
+		idx := 0
+		for {
+			start := strings.IndexByte(line[idx:], quote)
+			if start == -1 {
+				break
+			}
+			start += idx
+			end := strings.IndexByte(line[start+1:], quote)
+			if end == -1 {
+				break
+			}
+			end += start + 1
+			quoted := line[start+1 : end]
+			if strings.Contains(strings.ToLower(quoted), pattern) && strings.HasPrefix(quoted, "/") {
+				// Clean: take just the path portion (stop at whitespace, quote, or comma)
+				return cleanPath(quoted)
+			}
+			idx = end + 1
+		}
+	}
+	return ""
+}
+
+// cleanPath extracts a clean URL path, stopping at query strings or whitespace.
+func cleanPath(s string) string {
+	// Trim trailing characters that are not path-like
+	s = strings.TrimRight(s, " \t\r\n,;")
+	// Stop at query string
+	if idx := strings.IndexByte(s, '?'); idx != -1 {
+		s = s[:idx]
+	}
+	// Ensure it starts with /
+	if !strings.HasPrefix(s, "/") {
+		return ""
+	}
+	return s
 }
