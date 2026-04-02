@@ -47,7 +47,7 @@ func newNavModel(currentCmd string) navModel {
 func (n navModel) HandleNavKey(msg tea.KeyMsg) (navModel, bool, tea.Cmd) {
 	if !n.active {
 		// Trigger on colon
-		if msg.String() == ":" {
+		if msg.String() == "ctrl+n" {
 			n.active = true
 			// Start cursor on first item that isn't current
 			n.cursor = 0
@@ -64,7 +64,7 @@ func (n navModel) HandleNavKey(msg tea.KeyMsg) (navModel, bool, tea.Cmd) {
 
 	// Nav is active -- consume all keys
 	switch msg.String() {
-	case "esc", ":":
+	case "esc", "ctrl+n":
 		n.active = false
 		return n, true, nil
 	case "j", "down":
@@ -166,7 +166,7 @@ func (n navModel) ViewNav(width int) string {
 
 // NavHint returns a short hint string for the footer (e.g., ": switch")
 func NavHint() string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(": switch")
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("ctrl+n switch")
 }
 
 // RunNavTarget launches the selected command. Call this after the TUI exits with NavSwitchMsg.

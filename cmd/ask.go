@@ -165,8 +165,8 @@ func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch key {
-	case "enter":
+	switch {
+	case key == "enter":
 		question := strings.TrimSpace(m.input)
 		if question == "" {
 			return m, nil
@@ -178,16 +178,14 @@ func (m askModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{role: "assistant", content: ""})
 		go m.streamResponse(question)
 		return m, nil
-	case "backspace":
+	case key == "backspace":
 		if len(m.input) > 0 {
 			m.input = m.input[:len(m.input)-1]
 		}
-	default:
-		if len(key) == 1 {
-			m.input += key
-		} else if key == "space" {
-			m.input += " "
-		}
+	case key == "space":
+		m.input += " "
+	case msg.Type == tea.KeyRunes:
+		m.input += msg.String()
 	}
 
 	return m, nil
